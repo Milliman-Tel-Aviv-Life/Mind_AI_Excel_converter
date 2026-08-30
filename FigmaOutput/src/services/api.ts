@@ -1,0 +1,358 @@
+import type { ApplyResult, CellWindow, ChatMessage, ChatReply, Delta, FixTarget, Mode, Operation, PrepAction, RecalcResult, ReportBuild, ValidationReport, Version, WorkbookSummary } from "../types";
+
+import workbookMock from "../mocks/workbook.json";
+import reportMock from "../mocks/report.json";
+import planMock from "../mocks/plan.json";
+import versionsMock from "../mocks/versions.json";
+import chatMock from "../mocks/chat.json";
+
+/**
+ * Live data layer. Every function talks to the FastAPI backend
+ * (excel-upload-preparation/app/web/server.py) under `/api`; in development
+ * Vite proxies `/api` to http://localhost:8600 (see vite.config.ts).
+ * Set VITE_USE_MOCKS=true to fall back to the design-time fixtures.
+ */
+const USE_MOCKS = import.meta.env.VITE_USE_MOCKS === "true";
+const API = "/api";
+
+function delay(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function cast<T>(v: unknown): T {
+  return v as T;
+}
+
+async function unwrap<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body && typeof body.detail === "string") detail = body.detail;
+    } catch {
+      /* not JSON */
+    }
+    throw new Error(detail);
+  }
+  return (await res.json()) as T;
+}
+
+async function post<T>(path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    method: "POST",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  return unwrap<T>(res);
+}
+
+export interface SessionStart {
+  sessionId: string;
+  summary: WorkbookSummary;
+  report: ValidationReport;
+  plan: PrepAction[];
+  version: Version;
+}
+
+/** A fresh analysis of the current version, with what changed since the previous one. */
+export interface Reanalysis {
+  summary: WorkbookSummary;
+  report: ValidationReport;
+  plan: PrepAction[];
+  delta?: Delta;
+  versions?: Version[];
+}
+
+/** applyOperations also returns the re-analysis of the new file when the backend ran one. */
+export interface ApplyOutcome extends Partial<Reanalysis> {
+  result: ApplyResult;
+  version: Version;
+}
+
+export async function uploadWorkbook(file: File, mode: Mode): Promise<SessionStart> {
+  if (USE_MOCKS) {
+    await delay(3500);
+    return {
+      sessionId: "session-mock-001",
+      summary: cast<WorkbookSummary>(workbookMock),
+      report: cast<ValidationReport>(reportMock),
+      plan: cast<PrepAction[]>(planMock),
+      version: cast<Version[]>(versionsMock)[0],
+    };
+  }
+  const form = new FormData();
+  form.append("file", file, file.name);
+  form.append("mode", mode);
+  const res = await fetch(`${API}/sessions`, { method: "POST", body: form });
+  return unwrap<SessionStart>(res);
+}
+
+export async function reanalyze(sessionId: string, versionId: string): Promise<Reanalysis> {
+  if (USE_MOCKS) {
+    await delay(2500);
+    return {
+      summary: cast<WorkbookSummary>(workbookMock),
+      report: cast<ValidationReport>(reportMock),
+      plan: cast<PrepAction[]>(planMock),
+    };
+  }
+  return post<Reanalysis>(`/sessions/${encodeURIComponent(sessionId)}/reanalyze`, { versionId });
+}
+
+export async function applyOperations(
+  sessionId: string,
+  operations: Operation[],
+  options: { reanalyze?: boolean } = {}
+): Promise<ApplyOutcome> {
+  if (USE_MOCKS) {
+    await delay(3000);
+    const result: ApplyResult = {
+      status: "APPLIED",
+      method: "excel_com",
+      output_path: "/tmp/IFRS_Risk_Model_prep.xlsm",
+      output_name: "IFRS_Risk_Model_prep.xlsm",
+      applied: operations,
+      failed: [],
+      verified_opens_in_excel: true,
+      warnings: [],
+      message: `${operations.length} operation(s) applied successfully. Written by Excel and verified to open.`,
+    };
+    const newVersion: Version = {
+      id: `ver-${Date.now()}`,
+      label: `v2 — Prep: ${operations.length} changes via Excel · verified`,
+      file_name: "IFRS_Risk_Model_prep.xlsm",
+      sha256: "mock",
+      created_at: new Date().toISOString(),
+      source: "prep",
+      change_log: operations,
+      verified_opens_in_excel: true,
+    };
+    return { result, version: newVersion };
+  }
+  return post<ApplyOutcome>(`/sessions/${encodeURIComponent(sessionId)}/apply`, {
+    operations,
+    reanalyze: options.reanalyze ?? true,
+  });
+}
+
+export async function suggestFormulaFix(
+  sessionId: string,
+  ruleId: string,
+  sheet: string,
+  cell: string
+): Promise<{ suggestion: string | null; formula: string | null; message: string | null }> {
+  if (USE_MOCKS) {
+    await delay(2000);
+    return {
+      suggestion: "Replace AGGREGATE with SUBTOTAL (which is on the supported list).",
+      formula: "=SUBTOTAL(9,L8:L200)",
+      message: null,
+    };
+  }
+  return post(`/sessions/${encodeURIComponent(sessionId)}/suggest`, { ruleId, sheet, cell });
+}
+
+/**
+ * One conversation turn. `focus` (optional) ties the question to one finding --
+ * the backend then retrieves that finding's details and the cell contents.
+ */
+export async function chat(sessionId: string, history: ChatMessage[], question: string, focus?: FixTarget): Promise<ChatReply> {
+  if (USE_MOCKS) {
+    await delay(1800);
+    const last = cast<Array<{ role: string; content: string; provenance?: unknown }>>(chatMock).find(
+      (m) => m.role === "assistant" && m.provenance
+    );
+    return {
+      text: last?.content ?? "I don't have more information on that topic in the current context.",
+      proposal: null,
+      provenance: { context_chars: 14200, detail_chars: 2100, lookups: 1 },
+    };
+  }
+  return post<ChatReply>(`/sessions/${encodeURIComponent(sessionId)}/chat`, {
+    history: history.map((m) => ({ role: m.role, content: m.content, note: m.note ?? false })),
+    question,
+    focus: focus
+      ? {
+          kind: focus.kind ?? "finding",
+          rule_id: focus.rule_id,
+          sheet: focus.sheet,
+          cell: focus.cell,
+          error: focus.error,
+          formula: focus.formula,
+          addin_gap: focus.addin_gap ?? false,
+          cells: focus.cells,
+          cause: focus.cause,
+        }
+      : undefined,
+  });
+}
+
+export async function recalculate(sessionId: string): Promise<RecalcResult> {
+  if (USE_MOCKS) {
+    await delay(6000);
+    return {
+      status: "ERROR",
+      message: "Recalculation complete. Formula errors detected.",
+      formula_errors: [{ sheet: "MM_Change_Log", cell: "L7", error: "#NAME?", formula: "=AGGREGATE(9,6,D7:D200)" }],
+      addin_gap_errors: [{ sheet: "BEL", cell: "C5", formula: '=MM_RESULT(CohortLoop,"BEL")' }],
+    };
+  }
+  return post<RecalcResult>(`/sessions/${encodeURIComponent(sessionId)}/recalculate`);
+}
+
+export async function generateReports(sessionId: string): Promise<ReportBuild> {
+  if (USE_MOCKS) {
+    await delay(4000);
+    return {
+      standalone_name: "IFRS_Risk_Model_report.xlsx",
+      workbook_name: "IFRS_Risk_Model_with_report.xlsm",
+      method: "excel_com",
+      verified_opens_in_excel: true,
+      warnings: [],
+    };
+  }
+  return post<ReportBuild>(`/sessions/${encodeURIComponent(sessionId)}/reports`);
+}
+
+export async function cellWindow(sessionId: string, sheet: string, cell: string, rows = 3, cols = 3): Promise<CellWindow> {
+  if (USE_MOCKS) {
+    await delay(200);
+    return { sheet, focus: cell, columns: ["A", "B"], rows: [{ row: 1, cells: [{ ref: "A1", value: "mock", formula: null, array: null, error: false, focus: true }, { ref: "B1", value: 1, formula: "=1", array: null, error: false, focus: false }] }], values_from: "mock" };
+  }
+  const q = new URLSearchParams({ sheet, cell, rows: String(rows), cols: String(cols) });
+  const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/cells?${q}`);
+  return unwrap<CellWindow>(res);
+}
+
+/** One grid whose name carries no meaning, with the alternative the assistant proposes. */
+export interface GridNameSuggestion {
+  grid: string;
+  sheet: string;
+  ref: string;
+  size: string;
+  current: string | null;
+  deterministic: string;
+  deterministic_source: string;
+  suggested: string | null;
+}
+
+export interface GridNamesResult {
+  available: boolean;
+  names: GridNameSuggestion[];
+  message: string | null;
+  applied: boolean;
+  plan?: PrepAction[] | null;
+}
+
+/**
+ * Ask the assistant (Milliman APIM) to name the grids the heuristics could only
+ * call "<Sheet> <Anchor>". Nothing is written: with `apply` the names are folded
+ * into the prep plan, which the user still reviews and approves.
+ */
+export async function suggestGridNames(sessionId: string, apply = true): Promise<GridNamesResult> {
+  if (USE_MOCKS) {
+    await delay(1500);
+    return {
+      available: true,
+      applied: apply,
+      message: null,
+      names: [
+        { grid: "Cashflows!C27:E39", sheet: "Cashflows", ref: "C27:E39", size: "13x3", current: null, deterministic: "Cashflows C27", deterministic_source: "sheet name + position", suggested: "Demographic Assumption Inputs" },
+      ],
+    };
+  }
+  return post<GridNamesResult>(`/sessions/${encodeURIComponent(sessionId)}/grid-names`, { apply });
+}
+
+/** Options for the autonomous run-in-Mind loop (app/mind_loop.py). */
+export interface MindLoopOptions {
+  maxIterations?: number;
+  useAssistant?: boolean;
+  runModel?: boolean;
+  checkNumbers?: boolean;
+  skipMind?: boolean;
+  enable?: string[];
+  disable?: string[];
+}
+
+export interface MindLoopEvent { t: number; event: string; message?: string; n?: number; verdict?: string }
+
+export interface MindLoopIteration {
+  n: number;
+  enabled: string[];
+  disabled: string[];
+  actions: { id: string; count: number }[];
+  apply?: { status: string; applied: number; failed: number; verified: boolean | null; message: string; output: string };
+  names?: { grids: number; baseline_grids: number; fragmented: boolean; unnamed: number; unnamed_grids: string[]; still_titleable: number; blocked: string[]; ok: boolean };
+  numbers?: { ran: boolean; match?: boolean; compared?: number; differences?: number; listed?: { sheet: string; cell: string | null; prepared_cell?: string; source: unknown; prepared: unknown }[]; volatile_skipped?: number; message?: string };
+  mind?: {
+    skipped: boolean;
+    reason?: string;
+    error?: string;
+    convert?: { success: boolean; steps: Record<string, string>; errors: string[] };
+    templates?: { stem: string; entries: number; untitled: { label: string; cell: string }[] };
+    counts?: { mind_untitled: number | null; app_untitled: number };
+    run?: { completed: boolean; audit_consistent: boolean; seconds: number | null };
+    exports?: { opened: boolean; elements: number | null };
+  };
+  decision?: { verdict: "converged" | "retry" | "stuck"; reason: string; enable: string[]; disable: string[] };
+}
+
+export interface MindLoopReport {
+  source: string;
+  started: string;
+  finished?: string;
+  iterations: MindLoopIteration[];
+  projects: { name: string; status: string; ran: boolean; delete?: string }[];
+  verdict: "converged" | "stuck" | "exhausted" | null;
+  reason: string | null;
+  final_workbook?: string;
+  leftover_projects?: string[];
+}
+
+export interface MindLoopStatus {
+  state: "idle" | "running" | "done" | "error";
+  events: MindLoopEvent[];
+  next: number;
+  report: MindLoopReport | null;
+  error?: string | null;
+  summary?: string | null;
+  work_dir?: string;
+}
+
+export async function startMindLoop(sessionId: string, options: MindLoopOptions = {}): Promise<{ state: string; work_dir: string }> {
+  if (USE_MOCKS) {
+    await delay(300);
+    return { state: "running", work_dir: "/tmp/mind_loop" };
+  }
+  return post(`/sessions/${encodeURIComponent(sessionId)}/mind-loop`, options);
+}
+
+export async function mindLoopStatus(sessionId: string, after = 0): Promise<MindLoopStatus> {
+  if (USE_MOCKS) {
+    await delay(200);
+    return { state: "idle", events: [], next: 0, report: null };
+  }
+  return unwrap<MindLoopStatus>(await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/mind-loop?after=${after}`));
+}
+
+export interface AppHealth { version: string; rules: number; excel: boolean; assistant: boolean; frontend: boolean }
+
+/** Live build info from the running backend (version, active rule count, capabilities). */
+export async function health(): Promise<AppHealth> {
+  return unwrap<AppHealth>(await fetch(`${API}/health`));
+}
+
+export function downloadUrl(sessionId: string, fileName: string): string {
+  if (USE_MOCKS) return `#download/${encodeURIComponent(fileName)}`;
+  return `${API}/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(fileName)}`;
+}
+
+export async function listVersions(sessionId: string): Promise<Version[]> {
+  if (USE_MOCKS) {
+    await delay(400);
+    return cast<Version[]>(versionsMock);
+  }
+  const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/versions`);
+  return unwrap<Version[]>(res);
+}

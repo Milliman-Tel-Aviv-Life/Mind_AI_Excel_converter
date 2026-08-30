@@ -1,0 +1,2384 @@
+# MM Function Registry
+
+Version: 0.1  
+Purpose: Structured MMForExcel function registry for the Milliman Mind Copilot Skill.  
+Primary consumers: Formula Builder, Workbook Auditor, Formula Reviewer.
+
+---
+
+# 1. Registry Rules
+
+## 1.1 Source Of Truth
+
+This file is the authoritative registry for MMForExcel function syntax and behaviour used by the Milliman Mind Copilot Skill.
+
+The skill must not invent MM function syntax.
+
+If a function is not listed here, the skill must respond:
+
+```text
+Function not in registry. Do not auto-generate or auto-correct this formula until the registry is expanded.
+```
+
+## 1.2 How The Skill Must Use This Registry
+
+For each formula-related request, the skill must:
+
+1. Identify the function name.
+2. Check whether the function exists in this registry.
+3. Use only the documented syntax from this registry.
+4. Apply all listed validation rules.
+5. Warn when Excel behaviour differs from Mind behaviour.
+6. Warn when loop names are case-sensitive.
+7. Warn when empty arguments are not accepted by Mind.
+8. Avoid changing actuarial logic unless explicitly instructed.
+
+## 1.3 Function Entry Format
+
+Each function entry uses this structure:
+
+```yaml
+function:
+category:
+syntax:
+purpose:
+parameters:
+mind_behavior:
+excel_behavior:
+validation_rules:
+common_mistakes:
+use_when:
+avoid_when:
+related_functions:
+registry_status:
+```
+
+---
+
+# 2. Core Loop And Dimension Functions
+
+---
+
+## 2.1 MM_LOOP
+
+```yaml
+function: MM_LOOP
+category: Loop / Dimension
+syntax: '=MM_LOOP("Name", Range, [Index], [IndexStart], [IndexEnd])'
+
+purpose: >
+  Creates a loop from a range and turns cells into multidimensional cells.
+  It enables Mind to run and navigate dimensions such as scenarios, products,
+  contracts, periods, or other repeated assumptions.
+
+parameters:
+  Name:
+    required: true
+    type: string
+    description: Name used to refer to the loop.
+  Range:
+    required: true
+    type: range_or_single_integer_cell
+    description: >
+      One row or one column used as the loop dimensions. A single cell containing
+      an integer n can also be used, creating dimensions 1 through n.
+  Index:
+    required: false
+    type: integer
+    default: 1
+    description: Index displayed in Excel.
+  IndexStart:
+    required: false
+    type: integer
+    default: 1
+    description: First loop element used.
+  IndexEnd:
+    required: false
+    type: integer
+    default: size_of_range
+    description: Last loop element used.
+
+mind_behavior:
+  - Creates multidimensional cells.
+  - Loop dimensions can be navigated in Mind.
+  - Loop indexes may be displayed at the top of Mind tables.
+
+excel_behavior:
+  - Excel displays the value for the selected Index.
+  - If Index is omitted, Excel displays index 1.
+
+validation_rules:
+  - Loop names are case-sensitive.
+  - If reusing an existing loop, use the same exact loop name.
+  - If the same loop is defined in multiple places, its ranges should have the same length.
+  - If loop size changes by instance, consider MM_LOOPINSTANCE.
+
+common_mistakes:
+  - Reusing the same loop name with different range sizes.
+  - Changing capitalization of the loop name.
+  - Expecting Excel to show every loop dimension.
+  - Using MM_LOOP when instance-specific loop size is required.
+
+use_when:
+  - Creating scenario loops.
+  - Creating product, contract, cohort, or projection loops.
+  - Creating multidimensional result cells.
+
+avoid_when:
+  - Loop size must vary by instance. Use MM_LOOPINSTANCE instead.
+
+related_functions:
+  - MM_RESULT
+  - MM_LOOPLABELS
+  - MM_DIMINDEX
+  - MM_DIMSIZE
+  - MM_LOOPINSTANCE
+
+registry_status: core_v0_1
+```
+
+---
+
+## 2.2 MM_RESULT
+
+```yaml
+function: MM_RESULT
+category: Dimension Access
+syntax: '=MM_RESULT(Cell, ["Name", Index], ["Name2", Index2], ...)'
+
+purpose: >
+  Returns the value of a multidimensional cell for specified loop dimensions.
+  If one or more loop dimensions are not specified, Mind sums over the omitted
+  loop dimensions.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Cell containing the multidimensional result to access.
+  Name_Index_pairs:
+    required: false
+    type: repeated_string_integer_pairs
+    description: >
+      Optional loop name and loop index pairs. Use "SIM" as Name to access a
+      specific simulation dimension.
+
+mind_behavior:
+  - Returns selected dimensions when loop/index pairs are supplied.
+  - Sums dimensions for omitted loops.
+  - Can use "SIM" to access a simulation index.
+
+excel_behavior:
+  - Displays the result according to the referenced cell and provided arguments.
+
+validation_rules:
+  - Loop names are case-sensitive.
+  - The same loop cannot be specified with different dimensions in one formula.
+  - Omitted loops are intentionally summed.
+  - Use separate MM_RESULT calls if summing selected dimensions of the same loop.
+
+common_mistakes:
+  - Forgetting that omitted loops are summed.
+  - Repeating the same loop with different indexes.
+  - Misspelling loop names.
+  - Using wrong capitalization for loop names.
+
+use_when:
+  - Reading a specific loop dimension.
+  - Summing across unspecified loop dimensions.
+  - Retrieving simulation-specific results with "SIM".
+
+avoid_when:
+  - The target cell is not multidimensional.
+  - Criteria-based aggregation is needed; use MM_SUMIF, MM_SUMIFS, MM_COUNTIF, MM_COUNTIFS, MM_AVERAGEIF, or MM_AVERAGEIFS.
+
+related_functions:
+  - MM_LOOP
+  - MM_SUM
+  - MM_SUMIF
+  - MM_SUMIFS
+  - MM_COUNTIF
+  - MM_AVERAGEIF
+  - MM_DIMINDEX
+
+registry_status: core_v0_1
+```
+
+---
+
+## 2.3 MM_DIMINDEX
+
+```yaml
+function: MM_DIMINDEX
+category: Dimension Access
+syntax: '=MM_DIMINDEX("Name")'
+
+purpose: >
+  Returns the selected dimension index of a specified loop, or the selected
+  simulation index when Name is "SIM".
+
+parameters:
+  Name:
+    required: true
+    type: string
+    description: Loop name, or "SIM" for the selected stochastic simulation index.
+
+mind_behavior:
+  - Returns selected loop index.
+  - Returns selected simulation index when Name is "SIM".
+
+excel_behavior:
+  - Used as a variable dimension index in formulas.
+
+validation_rules:
+  - LoopName is case-sensitive.
+  - "SIM" is used for the stochastic simulation dimension.
+  - The referenced loop should exist.
+
+common_mistakes:
+  - Using a loop name that does not exist.
+  - Incorrect capitalization.
+  - Forgetting to use "SIM" for simulations.
+
+use_when:
+  - Formula should follow the current selected dimension in Mind.
+  - A variable loop index is needed.
+
+avoid_when:
+  - A fixed loop index is required.
+
+related_functions:
+  - MM_RESULT
+  - MM_LOOP
+  - MM_DIMSIZE
+
+registry_status: core_v0_1
+```
+
+---
+
+## 2.4 MM_DIMSIZE
+
+```yaml
+function: MM_DIMSIZE
+category: Dimension Metadata
+syntax: '=MM_DIMSIZE("Name")'
+
+purpose: >
+  Returns the size of a specified loop, or the total number of launched
+  simulations when Name is "SIM".
+
+parameters:
+  Name:
+    required: true
+    type: string
+    description: Loop name, or "SIM" for total launched simulations.
+
+mind_behavior:
+  - Returns the number of dimensions for a loop.
+  - Returns total launched simulations when Name is "SIM".
+
+excel_behavior:
+  - Used as a dimension-size lookup in formulas.
+
+validation_rules:
+  - Use an existing loop name.
+  - Use "SIM" for total launched simulations.
+  - Loop names are case-sensitive.
+
+common_mistakes:
+  - Calling a loop before it is created.
+  - Misspelling the loop name.
+  - Using the wrong capitalization.
+
+use_when:
+  - Formula must react to loop size.
+  - Formula must know total simulation count.
+
+avoid_when:
+  - Dimension size is fixed and already known.
+
+related_functions:
+  - MM_LOOP
+  - MM_DIMINDEX
+  - MM_RESULT
+
+registry_status: core_v0_1
+```
+
+---
+
+# 3. Dynamic Resize And Range Functions
+
+---
+
+## 3.1 MM_SETSIZE
+
+```yaml
+function: MM_SETSIZE
+category: Resize
+syntax_numeric: '=Formula + MM_SETSIZE(NbRows, NbCols)'
+syntax_text: '=Formula & IF(MM_SETSIZE(NbRows, NbCols)=0,"",0)'
+
+purpose: >
+  Copies the formula in which it is used to adjacent cells and resizes the table.
+
+parameters:
+  Formula:
+    required: true
+    type: formula
+    description: Formula to copy to adjacent cells.
+  NbRows:
+    required: true
+    type: integer_or_cell_reference
+    description: Total rows to copy, including the original cell.
+  NbCols:
+    required: true
+    type: integer_or_cell_reference
+    description: Total columns to copy, including the original cell.
+
+mind_behavior:
+  - Resizes the table after each Mind run.
+  - Can resize tables dynamically.
+
+excel_behavior:
+  - Automatically updates cells when calculation occurs.
+  - Existing formulas are not overwritten.
+  - Equivalent to a dynamic fill handle in Excel.
+
+validation_rules:
+  - Do not use MM_SETSIZE inside another function.
+  - Add it to the formula being copied using + for numeric formulas.
+  - For text formulas, use the documented IF pattern.
+  - Destination cells should be empty before the formula is applied.
+  - Existing formulas must be deleted beforehand if they should be replaced.
+  - Formulas on the top row or left column may need to be filled separately in Excel.
+
+common_mistakes:
+  - Placing MM_SETSIZE inside another function.
+  - Expecting existing formulas to be overwritten.
+  - Forgetting to clear the destination range.
+  - Forgetting that Excel and Mind may resize surrounding table structures differently.
+
+use_when:
+  - A table must dynamically expand or contract.
+  - Formula copy size depends on model parameters.
+
+avoid_when:
+  - Output range is fixed.
+  - Destination cells contain formulas that should be preserved.
+
+related_functions:
+  - MM_LASTROW
+  - MM_LASTROWCELL
+  - MM_LASTCOLUMN
+  - MM_LASTCOLUMNCELL
+  - MM_TABLE
+  - MM_ROW
+  - MM_COLUMN
+
+registry_status: core_v0_1
+```
+
+---
+
+## 3.2 MM_GETRANGE
+
+```yaml
+function: MM_GETRANGE
+category: Dynamic Function Helper
+syntax: '=MM_GETRANGE(Cell, Cell2)'
+
+purpose: >
+  System helper used to calculate dynamic functions from the add-in. It appears
+  automatically on adjacent cells when certain dynamic functions are used.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Target cell where the range is stored; refers to the cell where the dynamic function is defined.
+  Cell2:
+    required: true
+    type: cell
+    description: Target cell where the range is stored; always equal to Cell.
+
+mind_behavior:
+  - Supports automatically resized dynamic functions.
+
+excel_behavior:
+  - Appears automatically on adjacent cells for relevant dynamic functions.
+
+validation_rules:
+  - Not meant to be directly written by users.
+  - Presence of MM_GETRANGE can identify that a function is dynamic.
+  - Dynamic functions using MM_GETRANGE are automatically resized.
+
+common_mistakes:
+  - User manually writing MM_GETRANGE.
+  - Treating MM_GETRANGE as business logic.
+  - Deleting helper cells without understanding the dynamic output.
+
+use_when:
+  - System-generated only.
+  - Reviewer may inspect it to identify dynamic functions.
+
+avoid_when:
+  - User-authored formulas.
+
+related_functions:
+  - MM_FILTER
+  - MM_REMOVEDUPLICATES
+  - MM_HUNION
+  - MM_VUNION
+
+registry_status: core_v0_1
+```
+
+---
+
+## 3.3 MM_TABLE
+
+```yaml
+function: MM_TABLE
+category: Dynamic Range
+syntax: '=MM_TABLE(Cell)'
+
+purpose: >
+  Returns a range starting from a specified cell and ending at the last cell of
+  the corresponding table.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Starting cell of the returned range.
+
+mind_behavior:
+  - Uses Mind table boundaries.
+  - Empty cells inside the table do not necessarily stop the table range.
+
+excel_behavior:
+  - May behave differently from Mind.
+  - In Excel, the returned range may stop at the last non-empty cell because Excel does not recognize Mind tables.
+
+validation_rules:
+  - Review formulas where empty cells exist inside the intended table.
+  - Use for dynamic tables where size varies.
+  - Confirm behaviour after upload.
+
+common_mistakes:
+  - Assuming Excel and Mind return the same range.
+  - Using it where a fixed range is sufficient.
+  - Not accounting for empty cells in Excel.
+
+use_when:
+  - Table size varies.
+  - Input Manager, interlinks, or dynamic instances can resize the table.
+
+avoid_when:
+  - Range is static and will not change.
+
+related_functions:
+  - MM_ROW
+  - MM_COLUMN
+  - MM_LASTROW
+  - MM_LASTCOLUMN
+  - MM_RANGE
+
+registry_status: core_v0_1
+```
+
+---
+
+## 3.4 MM_ROW
+
+```yaml
+function: MM_ROW
+category: Dynamic Range
+syntax: '=MM_ROW(Cell)'
+
+purpose: >
+  Returns a row range starting from a given cell and ending at the last column
+  of the corresponding table.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Starting cell of the row.
+
+mind_behavior:
+  - Returns the row range according to Mind table boundaries.
+
+excel_behavior:
+  - Returns a row range ending at the first empty cell, excluded.
+  - May differ from Mind.
+
+validation_rules:
+  - Validate formulas where the row contains empty cells.
+  - Review use in dynamic tables.
+  - Useful for instance-specific dynamic loops.
+
+common_mistakes:
+  - Assuming Excel result equals Mind result.
+  - Using fixed Excel ranges where dynamic table range is intended.
+
+use_when:
+  - A dynamic row range is needed.
+  - Table width can change.
+  - Defining instance-specific loops using dynamic rows.
+
+avoid_when:
+  - Row size is stable and explicit range is clearer.
+
+related_functions:
+  - MM_COLUMN
+  - MM_TABLE
+  - MM_LASTCOLUMN
+  - MM_LASTCOLUMNCELL
+  - MM_LOOP
+  - MM_INSTINDEX
+
+registry_status: core_v0_1
+```
+
+---
+
+## 3.5 MM_COLUMN
+
+```yaml
+function: MM_COLUMN
+category: Dynamic Range
+syntax: '=MM_COLUMN(Cell)'
+
+purpose: >
+  Returns a column range starting from a given cell and ending at the last row
+  of the corresponding table.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Starting cell of the column.
+
+mind_behavior:
+  - Returns the column range according to Mind table boundaries.
+
+excel_behavior:
+  - Returns a column range ending at the first empty cell, excluded.
+  - May differ from Mind.
+
+validation_rules:
+  - Validate formulas where the column contains empty cells.
+  - Review use in dynamic tables.
+  - Useful for instance-specific dynamic loops.
+
+common_mistakes:
+  - Assuming Excel result equals Mind result.
+  - Using it without considering empty cells.
+
+use_when:
+  - A column range must grow or shrink dynamically.
+  - Input Manager, interlinks, or dynamic instances can resize a table.
+
+avoid_when:
+  - A fixed range is adequate.
+
+related_functions:
+  - MM_ROW
+  - MM_TABLE
+  - MM_LASTROW
+  - MM_LASTROWCELL
+  - MM_LOOP
+  - MM_INSTINDEX
+
+registry_status: core_v0_1
+```
+
+---
+
+## 3.6 MM_LASTROW
+
+```yaml
+function: MM_LASTROW
+category: Dynamic Range Metadata
+syntax: '=MM_LASTROW(Cell)'
+
+purpose: >
+  Returns the index of the last row of a grid from one of its cells.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Any cell inside the grid whose last row index is needed.
+
+mind_behavior:
+  - Returns the last row index of the Mind grid.
+
+excel_behavior:
+  - Returns the row index before the first empty cell, starting from the specified cell.
+  - May differ from Mind.
+
+validation_rules:
+  - Use for dynamic tables.
+  - Review when empty cells exist below the specified cell.
+  - Confirm behaviour after upload.
+
+common_mistakes:
+  - Assuming Excel and Mind row indexes match.
+  - Using in static tables unnecessarily.
+
+use_when:
+  - Need the row index of the final row of a dynamic grid.
+
+avoid_when:
+  - Need a cell reference rather than a row index; use MM_LASTROWCELL.
+
+related_functions:
+  - MM_LASTROWCELL
+  - MM_LASTCOLUMN
+  - MM_TABLE
+  - MM_COLUMN
+
+registry_status: core_v0_1
+```
+
+---
+
+## 3.7 MM_LASTROWCELL
+
+```yaml
+function: MM_LASTROWCELL
+category: Dynamic Cell Reference
+syntax: '=MM_LASTROWCELL(Cell)'
+
+purpose: >
+  Returns the cell in the same column as the specified cell and in the last row
+  of the corresponding table.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Cell defining the table and the column for the output.
+
+mind_behavior:
+  - Refers to the cell in the last row of the Mind table and same column as Cell.
+
+excel_behavior:
+  - May return a different cell because Excel stops at the first empty cell.
+
+validation_rules:
+  - Use for formulas that refer to the end of a resized grid.
+  - Review when source columns contain empty cells.
+  - Can be used as a reference inside another function.
+
+common_mistakes:
+  - Using fixed end-cell references in resized grids.
+  - Assuming Excel return equals Mind return.
+
+use_when:
+  - A formula must reference the last row of a dynamic table.
+
+avoid_when:
+  - A fixed range is certain and simpler.
+
+related_functions:
+  - MM_LASTROW
+  - MM_LASTCOLUMNCELL
+  - MM_COLUMN
+  - MM_TABLE
+
+registry_status: core_v0_1
+```
+
+---
+
+## 3.8 MM_LASTCOLUMN
+
+```yaml
+function: MM_LASTCOLUMN
+category: Dynamic Range Metadata
+syntax: '=MM_LASTCOLUMN(Cell)'
+
+purpose: >
+  Returns the index of the last column of a grid from one of its cells.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Any cell inside the grid whose last column index is needed.
+
+mind_behavior:
+  - Returns the last column index of the Mind grid.
+
+excel_behavior:
+  - Returns the column index before the first empty cell, starting from the specified cell.
+  - May differ from Mind.
+
+validation_rules:
+  - Use for dynamic tables.
+  - Review when empty cells exist to the right of the specified cell.
+
+common_mistakes:
+  - Assuming Excel and Mind column indexes match.
+  - Using when a cell reference is needed.
+
+use_when:
+  - Need last column index of a dynamic grid.
+
+avoid_when:
+  - Need last cell reference; use MM_LASTCOLUMNCELL.
+
+related_functions:
+  - MM_LASTCOLUMNCELL
+  - MM_LASTROW
+  - MM_TABLE
+  - MM_ROW
+
+registry_status: core_v0_1
+```
+
+---
+
+## 3.9 MM_LASTCOLUMNCELL
+
+```yaml
+function: MM_LASTCOLUMNCELL
+category: Dynamic Cell Reference
+syntax: '=MM_LASTCOLUMNCELL(Cell)'
+
+purpose: >
+  Returns the cell in the same row as the specified cell and in the last column
+  of the corresponding table.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Cell defining the table and the row for the output.
+
+mind_behavior:
+  - Refers to the cell in the last column of the Mind table and same row as Cell.
+
+excel_behavior:
+  - May return a different cell because Excel stops at the first empty cell.
+
+validation_rules:
+  - Use for formulas that refer to the last column of a resized grid.
+  - Can be used as a reference inside another function.
+  - Review carefully when source rows include empty cells.
+
+common_mistakes:
+  - Using fixed last-column references in dynamic tables.
+  - Assuming Excel behaviour equals Mind behaviour.
+  - Forgetting that the function is designed for dynamic tables.
+
+use_when:
+  - A formula must reference the final column of a dynamic table.
+  - A table may resize because of Input Manager, interlinks, dynamic instances, or other resize logic.
+
+avoid_when:
+  - Range is static.
+  - A fixed reference is clearer and safe.
+
+related_functions:
+  - MM_LASTCOLUMN
+  - MM_LASTROWCELL
+  - MM_ROW
+  - MM_TABLE
+
+registry_status: core_v0_1
+```
+
+---
+
+## 3.10 MM_RANGE
+
+```yaml
+function: MM_RANGE
+category: Dynamic Range Output
+syntax: '=MM_RANGE(VirtualGrid)'
+
+purpose: >
+  Resizes and populates the table in which the function is contained to fit a
+  specified grid. It is useful to replace an array formula whose output size
+  varies depending on model inputs or parameters.
+
+parameters:
+  VirtualGrid:
+    required: true
+    type: virtual_grid_or_grid_returning_formula
+    description: Grid used to resize and populate the table containing MM_RANGE.
+
+mind_behavior:
+  - Result is seen in Mind.
+  - Resizes the containing table to fit the specified grid.
+  - Useful when a function returns a grid whose size varies.
+
+excel_behavior:
+  - Result is not seen in Excel in the same way as in Mind.
+  - This is a Mind add-in function rather than a standard Excel spilled-array mechanism.
+
+validation_rules:
+  - Must be used alone in a single-cell table.
+  - Not meant to be used inside another function.
+  - If VirtualGrid has fixed size, MM_RANGE may not be necessary.
+  - The output table should not contain other formulas or inputs.
+
+common_mistakes:
+  - Nesting MM_RANGE inside another function.
+  - Placing other formulas or inputs in the same output table.
+  - Expecting Excel and Mind display to match.
+  - Using MM_RANGE when a fixed array formula would be sufficient.
+
+use_when:
+  - A formula or custom formula returns a grid whose size varies.
+  - Replacing an array formula whose output size changes.
+  - Output dimensions depend on imported data or dynamic parameters.
+
+avoid_when:
+  - Output grid has fixed size.
+  - The output can safely be represented with a normal fixed range.
+
+related_functions:
+  - MM_TABLE
+  - MM_GETRANGE
+  - MM_ROW
+  - MM_COLUMN
+
+registry_status: expansion_candidate_v0_2
+```
+
+---
+
+# 4. Table Lookup Functions
+
+---
+
+## 4.1 MM_READTABLE
+
+```yaml
+function: MM_READTABLE
+category: Lookup / Table
+syntax: '=MM_READTABLE(Range, Header, Comparison1, [Comparison2], ...)'
+
+purpose: >
+  Returns the element of a table corresponding to a specified combination of
+  criteria. The first columns of the table are tested against comparison values.
+  This is similar to a lookup function with one or multiple criteria.
+
+parameters:
+  Range:
+    required: true
+    type: range
+    description: Table containing the value to look up and the criteria columns. Headers must be included.
+  Header:
+    required: true
+    type: string_or_cell_reference
+    description: Header of the column to return. Only one header can be selected.
+  Comparison1:
+    required: true
+    type: value_or_cell_reference
+    description: First criterion tested in the first column of Range.
+  Comparison2_plus:
+    required: false
+    type: value_or_cell_reference
+    description: Additional criteria tested in subsequent columns.
+
+mind_behavior:
+  - Returns the matching value from the selected Header column.
+  - If multiple rows match, returns the first matching value.
+  - If no row matches, returns a descriptive message.
+
+excel_behavior:
+  - Used as a lookup-like formula.
+
+validation_rules:
+  - Range must include headers.
+  - Header must identify one column only.
+  - Criteria are tested against the first columns of the table.
+  - Maximum documented comparison count is six.
+  - Criteria order matters because comparisons are evaluated against the first columns of Range.
+
+common_mistakes:
+  - Excluding headers from Range.
+  - Expecting all matching rows instead of first match.
+  - Using a Header value that does not exist.
+  - Supplying criteria in the wrong order.
+  - Using MM_READTABLE when no-match should return NaN.
+
+use_when:
+  - Need lookup with one or more criteria.
+  - Need first-match behaviour.
+  - A descriptive no-match message is useful.
+
+avoid_when:
+  - Missing-match result should be NaN; use MM_READTABLENAN.
+  - The logic requires returning all matches.
+
+related_functions:
+  - MM_READTABLENAN
+  - MM_TABLE
+  - MM_COLUMN
+
+registry_status: core_v0_1
+```
+
+---
+
+## 4.2 MM_READTABLENAN
+
+```yaml
+function: MM_READTABLENAN
+category: Lookup / Table
+syntax: '=MM_READTABLENAN(Range, Header, Comparison1, [Comparison2], ...)'
+
+purpose: >
+  Returns the element of a table corresponding to a specified combination of
+  criteria, similar to MM_READTABLE, but no-match behaviour returns NaN.
+
+parameters:
+  Range:
+    required: true
+    type: range
+    description: Table containing value and criteria columns. Headers must be included.
+  Header:
+    required: true
+    type: string_or_cell_reference
+    description: Header of the column to return.
+  Comparison1:
+    required: true
+    type: value_or_cell_reference
+    description: First criterion.
+  Comparison2_plus:
+    required: false
+    type: value_or_cell_reference
+    description: Additional criteria.
+
+mind_behavior:
+  - Same lookup pattern as MM_READTABLE.
+  - If no row matches, returns NaN.
+  - If several rows match, returns the first matching value.
+
+excel_behavior:
+  - Used as a lookup-like formula.
+
+validation_rules:
+  - Follow MM_READTABLE validation rules.
+  - Use when downstream formulas should handle NaN rather than descriptive text.
+  - Range must include headers.
+  - Header must identify one column only.
+
+common_mistakes:
+  - Using MM_READTABLE when numeric/error propagation requires NaN.
+  - Supplying criteria in the wrong order.
+  - Excluding headers from Range.
+  - Forgetting that duplicate matches return the first matching result.
+
+use_when:
+  - Missing lookup should produce NaN.
+  - Output is used in numeric calculations.
+  - Lookup failures should propagate as errors.
+
+avoid_when:
+  - User-facing descriptive unmatched messages are preferred.
+
+related_functions:
+  - MM_READTABLE
+  - MM_COLUMN
+
+registry_status: core_v0_1
+```
+
+---
+
+# 5. Aggregation Functions
+
+---
+
+## 5.1 MM_SUM
+
+```yaml
+function: MM_SUM
+category: Aggregation / Simulation
+syntax: '=MM_SUM(Cell)'
+
+purpose: >
+  Sums the results of all simulations for a given cell.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Cell whose simulation results should be summed.
+
+mind_behavior:
+  - Sums stochastic simulation dimensions.
+  - Keeps loop dimensions from the table for the specified cell.
+
+excel_behavior:
+  - Used as an MM aggregation function.
+
+validation_rules:
+  - Use MM_RESULT when the goal is to sum loop dimensions.
+  - If Cell is stochastic without loop dimensions, MM_SUM and MM_RESULT may behave similarly.
+  - Confirm whether the target cell has stochastic dimensions, loop dimensions, or both.
+
+common_mistakes:
+  - Expecting MM_SUM to sum loop dimensions.
+  - Using MM_SUM where MM_RESULT is required.
+  - Forgetting that loops are retained.
+
+use_when:
+  - Need to sum simulation values while keeping loop dimensions.
+
+avoid_when:
+  - Need to aggregate loop dimensions.
+  - Need criteria-based aggregation.
+
+related_functions:
+  - MM_RESULT
+  - MM_SUMIF
+  - MM_SUMIFS
+
+registry_status: core_v0_1
+```
+
+---
+
+## 5.2 MM_SUMIF
+
+```yaml
+function: MM_SUMIF
+category: Aggregation / Criteria
+syntax: '=MM_SUMIF(Value, Condition, [Sum_value], ["Name", Index], ["Name2", Index2], ...)'
+
+purpose: >
+  Equivalent of SUMIF for Mind multidimensional values. Returns the sum of values
+  across all or specified dimensions that meet one criterion.
+
+parameters:
+  Value:
+    required: true
+    type: cell_or_range
+    description: Cells tested against the condition.
+  Condition:
+    required: true
+    type: string_number_or_cell_reference
+    description: Criterion used to select values. Logical symbols must be written as strings.
+  Sum_value:
+    required: false
+    type: cell_or_range
+    description: Actual range to sum. If omitted, Value is used.
+  Name_Index_pairs:
+    required: false
+    type: repeated_string_integer_pairs
+    description: Optional loop or simulation dimension selectors.
+
+mind_behavior:
+  - Applies criteria across loop and/or stochastic dimensions.
+  - If no dimension meets the criterion, returns 0.
+  - Can specify "SIM" as Name to select a specific simulation.
+
+excel_behavior:
+  - Similar purpose to Excel SUMIF, but dimension-aware.
+
+validation_rules:
+  - Loop names are case-sensitive.
+  - If specifying loop dimensions, include Sum_value even if it equals Value.
+  - Value and Sum_value must have the same length and same dimensions.
+  - Criteria with >, <, or = must be strings, such as ">0".
+  - Use decimal point in string criteria.
+  - Do not specify the same loop with different dimensions.
+
+common_mistakes:
+  - Leaving empty parameters.
+  - Not supplying Sum_value when using loop-index arguments.
+  - Using ranges with different dimension sizes.
+  - Specifying the same loop with different dimensions.
+  - Using MM_SUMIF when native Excel SUMIF is sufficient.
+
+use_when:
+  - Need one-condition sum over loop or stochastic dimensions.
+
+avoid_when:
+  - More than one criterion is needed; use MM_SUMIFS.
+  - Value has no multiple dimensions; use Excel SUMIF.
+
+related_functions:
+  - MM_SUMIFS
+  - MM_SUM
+  - MM_RESULT
+
+registry_status: core_v0_1
+```
+
+---
+
+## 5.3 MM_SUMIFS
+
+```yaml
+function: MM_SUMIFS
+category: Aggregation / Criteria
+syntax: '=MM_SUMIFS(Sum_value, Range1, Condition1, [Range2, Condition2], [Range3, Condition3], ["Name", Index], ["Name2", Index2], ...)'
+
+purpose: >
+  Equivalent of SUMIFS for Mind multidimensional values. Returns the sum of
+  values across all or specified dimensions that meet a set of criteria.
+
+parameters:
+  Sum_value:
+    required: true
+    type: cell_or_range
+    description: Cells to sum if criteria are met.
+  Range1:
+    required: true
+    type: cell_or_range
+    description: Range tested for Condition1.
+  Condition1:
+    required: true
+    type: string_number_or_cell_reference
+    description: First criterion.
+  Range2_Condition2:
+    required: false
+    type: pair
+    description: Second range and criterion.
+  Range3_Condition3:
+    required: false
+    type: pair
+    description: Third range and criterion.
+  Name_Index_pairs:
+    required: false
+    type: repeated_string_integer_pairs
+    description: Optional loop or simulation dimension selectors.
+
+mind_behavior:
+  - Applies multiple criteria across loop and stochastic dimensions.
+  - If criteria are never met, returns 0.
+  - Can specify "SIM" for a selected simulation.
+
+excel_behavior:
+  - Similar purpose to Excel SUMIFS, but dimension-aware.
+
+validation_rules:
+  - LoopName is case-sensitive.
+  - If specifying loops, all first seven parameters should be input.
+  - Use empty strings "" where needed; Mind does not accept empty parameters.
+  - Sum_value and criteria ranges must have the same length and dimensions.
+  - Criteria with logical symbols must be strings.
+  - Use decimal point in string criteria.
+  - Do not specify the same loop with different dimensions.
+
+common_mistakes:
+  - Leaving omitted criteria as blank rather than "".
+  - Using mismatched ranges or dimensions.
+  - Using MM_SUMIFS when Sum_value has no multiple dimensions.
+  - Forgetting placeholder arguments before loop selectors.
+
+use_when:
+  - Need multi-condition sum across dimensions.
+
+avoid_when:
+  - There is only one criterion; use MM_SUMIF.
+  - Data has no multiple dimensions; use Excel SUMIFS.
+
+related_functions:
+  - MM_SUMIF
+  - MM_SUM
+  - MM_RESULT
+
+registry_status: core_v0_1
+```
+
+---
+
+## 5.4 MM_COUNTIF
+
+```yaml
+function: MM_COUNTIF
+category: Aggregation / Criteria
+syntax: '=MM_COUNTIF(Value, Condition, ["Name", Index], ["Name2", Index2], ...)'
+
+purpose: >
+  Equivalent of COUNTIF for Mind multidimensional values. Returns the number of
+  dimension indexes of a range that meet one criterion.
+
+parameters:
+  Value:
+    required: true
+    type: cell_or_range
+    description: Cells to be counted if they meet the criterion.
+  Condition:
+    required: true
+    type: string_number_or_cell_reference
+    description: Criterion used to select values for the count.
+  Name_Index_pairs:
+    required: false
+    type: repeated_string_integer_pairs
+    description: Optional loop or simulation dimension selectors.
+
+mind_behavior:
+  - Counts dimension indexes that meet the condition.
+  - If no dimension meets the condition, returns 0.
+  - Can specify "SIM" for a selected simulation.
+
+excel_behavior:
+  - Similar purpose to Excel COUNTIF, but dimension-aware.
+
+validation_rules:
+  - LoopName is case-sensitive.
+  - Criteria with logical symbols must be strings.
+  - Use decimal point in string criteria.
+  - Do not specify the same loop with different dimensions.
+
+common_mistakes:
+  - Using MM_COUNTIF when Value has no multiple dimensions.
+  - Expecting it to count ordinary cells rather than dimension indexes.
+  - Wrong loop name case.
+
+use_when:
+  - Need one-condition count across loop or stochastic dimensions.
+
+avoid_when:
+  - More than one criterion is needed; use MM_COUNTIFS.
+  - Value has no multiple dimensions; use Excel COUNTIF.
+
+related_functions:
+  - MM_COUNTIFS
+  - MM_RESULT
+
+registry_status: core_v0_1
+```
+
+---
+
+## 5.5 MM_COUNTIFS
+
+```yaml
+function: MM_COUNTIFS
+category: Aggregation / Criteria
+syntax: '=MM_COUNTIFS(Range1, Condition1, [Range2, Condition2], [Range3, Condition3], ["Name", Index], ["Name2", Index2], ...)'
+
+purpose: >
+  Equivalent of COUNTIFS for Mind multidimensional values. Returns the number
+  of dimension indexes that meet a set of criteria.
+
+parameters:
+  Range1:
+    required: true
+    type: cell_or_range
+    description: Range tested for Condition1.
+  Condition1:
+    required: true
+    type: string_number_or_cell_reference
+    description: First criterion.
+  Range2_Condition2:
+    required: false
+    type: pair
+    description: Second range and criterion.
+  Range3_Condition3:
+    required: false
+    type: pair
+    description: Third range and criterion.
+  Name_Index_pairs:
+    required: false
+    type: repeated_string_integer_pairs
+    description: Optional loop or simulation dimension selectors.
+
+mind_behavior:
+  - Counts dimension indexes that meet all criteria.
+  - Can specify selected loop or simulation dimensions.
+  - If the criteria are never met, returns 0.
+
+excel_behavior:
+  - Similar purpose to Excel COUNTIFS, but dimension-aware.
+
+validation_rules:
+  - LoopName is case-sensitive.
+  - Criteria with logical symbols must be strings.
+  - Use decimal point in string criteria.
+  - Use "" where optional criteria need placeholders before loop arguments.
+  - Ranges should align in size and dimensions.
+  - Do not specify the same loop with different dimensions.
+
+common_mistakes:
+  - Blank optional parameters instead of "".
+  - Mismatched range dimensions.
+  - Wrong loop name case.
+  - Using MM_COUNTIFS when native Excel COUNTIFS is sufficient.
+
+use_when:
+  - Need multi-condition count across dimensions.
+
+avoid_when:
+  - Only one criterion is needed; use MM_COUNTIF.
+  - No multidimensional behaviour is required; use Excel COUNTIFS.
+
+related_functions:
+  - MM_COUNTIF
+  - MM_RESULT
+
+registry_status: core_v0_1
+```
+
+---
+
+## 5.6 MM_AVERAGEIF
+
+```yaml
+function: MM_AVERAGEIF
+category: Aggregation / Criteria
+syntax: '=MM_AVERAGEIF(Value, Condition, [Average_value], ["Name", Index], ["Name2", Index2], ...)'
+
+purpose: >
+  Equivalent of AVERAGEIF for Mind multidimensional values. Returns the average
+  of values across all or specified dimensions that meet one criterion.
+
+parameters:
+  Value:
+    required: true
+    type: cell_or_range
+    description: Cells to be tested against the criterion.
+  Condition:
+    required: true
+    type: string_number_or_cell_reference
+    description: Criterion used to select values to average.
+  Average_value:
+    required: false
+    type: cell_or_range
+    description: Actual range to average. If omitted, Value is used.
+  Name_Index_pairs:
+    required: false
+    type: repeated_string_integer_pairs
+    description: Optional loop or simulation dimension selectors.
+
+mind_behavior:
+  - Averages dimension values that meet the criterion.
+  - If no dimension value meets the criterion, returns NaN.
+  - Can specify "SIM" for a selected simulation.
+
+excel_behavior:
+  - Similar purpose to Excel AVERAGEIF, but dimension-aware.
+
+validation_rules:
+  - LoopName is case-sensitive.
+  - If specifying dimension pairs, Average_value must be input even if equal to Value.
+  - Value and Average_value must have same range size and loop dimensions.
+  - Criteria with logical symbols must be strings.
+  - Use decimal point in string criteria.
+  - Do not specify the same loop with different indexes.
+
+common_mistakes:
+  - Forgetting Average_value before loop arguments.
+  - Using mismatched dimensions.
+  - Using this when data has no loop or stochastic dimensions.
+  - Using blank arguments instead of required placeholders.
+
+use_when:
+  - Need one-condition average across dimensions.
+
+avoid_when:
+  - More than one criterion is needed; use MM_AVERAGEIFS.
+  - No multidimensional behaviour exists; use Excel AVERAGEIF.
+
+related_functions:
+  - MM_AVERAGEIFS
+  - MM_RESULT
+
+registry_status: core_v0_1
+```
+
+---
+
+## 5.7 MM_AVERAGEIFS
+
+```yaml
+function: MM_AVERAGEIFS
+category: Aggregation / Criteria
+syntax: '=MM_AVERAGEIFS(Average_value, Range1, Condition1, [Range2, Condition2], [Range3, Condition3], ["Name", Index], ["Name2", "Index2"], ...)'
+
+purpose: >
+  Equivalent of AVERAGEIFS for Mind multidimensional values. Returns the average
+  of values across all or specified dimensions that meet a set of criteria.
+
+parameters:
+  Average_value:
+    required: true
+    type: cell_or_range
+    description: Cells to average if all criteria are met.
+  Range1:
+    required: true
+    type: cell_or_range
+    description: Range tested for Condition1.
+  Condition1:
+    required: true
+    type: string_number_or_cell_reference
+    description: First criterion.
+  Range2_Condition2:
+    required: false
+    type: pair
+    description: Second range and criterion.
+  Range3_Condition3:
+    required: false
+    type: pair
+    description: Third range and criterion.
+  Name_Index_pairs:
+    required: false
+    type: repeated_string_integer_pairs
+    description: Optional loop or simulation dimension selectors.
+
+mind_behavior:
+  - Averages values that meet all criteria.
+  - If criteria are never met, returns NaN.
+  - Can specify "SIM" for a selected simulation.
+
+excel_behavior:
+  - Similar purpose to Excel AVERAGEIFS, but dimension-aware.
+
+validation_rules:
+  - LoopName is case-sensitive.
+  - If specifying loops, all first seven parameters must be input.
+  - Use "" placeholders where needed; Mind does not accept empty parameters.
+  - Average_value and criteria ranges must have same range size and loop dimensions.
+  - Criteria with logical symbols must be strings.
+  - Use decimal point in string criteria.
+  - Do not specify the same loop with different indexes.
+
+common_mistakes:
+  - Empty parameters instead of "".
+  - Mismatched range dimensions.
+  - Using this when Average_value has no loop or stochastic dimensions.
+  - Forgetting that no matches return NaN.
+
+use_when:
+  - Need multi-condition average across dimensions.
+
+avoid_when:
+  - Only one criterion is needed; use MM_AVERAGEIF.
+  - No multidimensional behaviour exists; use Excel AVERAGEIFS.
+
+related_functions:
+  - MM_AVERAGEIF
+  - MM_RESULT
+
+registry_status: core_v0_1
+```
+
+---
+
+# 6. Instance Functions
+
+---
+
+## 6.1 MM_INSTANCE
+
+```yaml
+function: MM_INSTANCE
+category: Instance
+syntax: '=MM_INSTANCE(Cell, Param, [NanIfNotExists])'
+
+purpose: >
+  Returns the value of a cell for a specified instance. Used to link different
+  instances.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Cell whose value should be returned. Not meant to be a range bigger than a cell.
+  Param:
+    required: true
+    type: index_or_name
+    description: Index or name of the instance to access.
+  NanIfNotExists:
+    required: false
+    type: boolean
+    description: >
+      If TRUE, returns NaN when the instance does not exist. If FALSE, returns
+      the initial Excel value of the cell.
+
+mind_behavior:
+  - Accesses values across instances.
+  - Can return NaN if requested instance does not exist and NanIfNotExists is TRUE.
+  - Can access values of a multidimensional cell for a specified instance.
+
+excel_behavior:
+  - Uses Excel default values where applicable.
+
+validation_rules:
+  - Cell should be a single cell.
+  - Param must identify an existing instance by index or name.
+  - Consider NanIfNotExists when missing instances are possible.
+  - Review carefully when used with dynamic loops.
+
+common_mistakes:
+  - Passing a range instead of a single cell.
+  - Assuming missing instances always return NaN.
+  - Using instance name inconsistently.
+  - Using the function when accessing the currently selected instance would give the same result.
+
+use_when:
+  - Linking values across instances.
+  - Consolidating across instance structures.
+  - Accessing another instance from the currently selected instance.
+
+avoid_when:
+  - Accessing a cell in the same selected instance where no instance lookup is required.
+
+related_functions:
+  - MM_INSTINDEX
+  - MM_INSTANCEKEY
+  - MM_ISINSTANCELOADED
+  - MM_INSTANCEUNION
+
+registry_status: core_v0_1
+```
+
+---
+
+## 6.2 MM_INSTINDEX
+
+```yaml
+function: MM_INSTINDEX
+category: Instance
+syntax: '=MM_INSTINDEX()'
+
+purpose: >
+  Returns the index of the selected instance in a table.
+
+parameters:
+  none:
+    required: false
+    type: none
+    description: No parameters.
+
+mind_behavior:
+  - Returns the selected instance index.
+  - Can be used to create loops specific to each instance.
+
+excel_behavior:
+  - Used in formulas that depend on selected or default instance context.
+
+validation_rules:
+  - Instances must be added beforehand.
+  - Use with care in loop names because it can create instance-specific loops.
+
+common_mistakes:
+  - Using before instances exist.
+  - Forgetting that loops created with instance indexes may be instance-specific.
+  - Assuming all instance-specific loops have the same size.
+
+use_when:
+  - Formula needs current instance index.
+  - Defining instance-specific loops.
+
+avoid_when:
+  - Formula should be identical across all instances without instance-dependent behaviour.
+
+related_functions:
+  - MM_INSTANCE
+  - MM_INSTANCEKEY
+  - MM_LOOP
+  - MM_COLUMN
+  - MM_ROW
+
+registry_status: core_v0_1
+```
+
+---
+
+## 6.3 MM_INSTANCEKEY
+
+```yaml
+function: MM_INSTANCEKEY
+category: Instance
+syntax: '=MM_INSTANCEKEY(["DefaultKey"])'
+
+purpose: >
+  Returns the label of the selected instance in a table.
+
+parameters:
+  DefaultKey:
+    required: false
+    type: string
+    description: Label/key returned by the function in Excel. This parameter is not used in Mind.
+
+mind_behavior:
+  - Returns the selected instance label/key once the model has been calculated.
+
+excel_behavior:
+  - Returns the DefaultKey parameter value if supplied.
+
+validation_rules:
+  - Instances must be added beforehand.
+  - Use when display or formula logic needs the selected instance label.
+
+common_mistakes:
+  - Assuming DefaultKey is used in Mind.
+  - Using before instance setup exists.
+  - Using this when the instance index is needed.
+
+use_when:
+  - Need the selected instance label.
+  - Need instance-aware display or lookup logic.
+
+avoid_when:
+  - Need the selected instance index; use MM_INSTINDEX.
+
+related_functions:
+  - MM_INSTINDEX
+  - MM_INSTANCE
+  - MM_ISINSTANCELOADED
+
+registry_status: core_v0_1
+```
+
+---
+
+## 6.4 MM_ISINSTANCELOADED
+
+```yaml
+function: MM_ISINSTANCELOADED
+category: Instance / Partial Load
+syntax: '=MM_ISINSTANCELOADED(Cell, InstanceKey)'
+
+purpose: >
+  Checks if a chosen current value is in an instance loaded in the current model
+  in Mind.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Cell containing the value to check. Not meant to be a range bigger than a cell.
+  InstanceKey:
+    required: true
+    type: string
+    description: Name of the instance to check.
+
+mind_behavior:
+  - Returns TRUE only if the instance key is loaded by the model in Mind.
+  - Useful in partial-load situations to avoid displaying default Excel values for unloaded instances.
+
+excel_behavior:
+  - Used in conditional formulas to protect against unloaded instance references.
+
+validation_rules:
+  - Cell should be a single cell.
+  - InstanceKey must match the instance to check.
+  - Use in IF conditions when partial load is possible.
+  - Add fallback values where unloaded instances should not return default Excel values.
+
+common_mistakes:
+  - Calling unloaded instances without fallback logic.
+  - Returning default Excel values unintentionally.
+  - Using ranges instead of a single cell.
+  - Forgetting to combine with MM_INSTANCE when accessing a value conditionally.
+
+use_when:
+  - Partial load is used.
+  - Formula references may point to unloaded instances.
+  - You need to avoid default Excel values for unloaded instances.
+
+avoid_when:
+  - All instances are always loaded and no fallback logic is required.
+
+related_functions:
+  - MM_INSTANCE
+  - MM_INSTINDEX
+  - MM_INSTANCEKEY
+
+registry_status: core_v0_1
+```
+
+---
+
+# 7. Iteration Functions
+
+---
+
+## 7.1 MM_ITERATIONS
+
+```yaml
+function: MM_ITERATIONS
+category: Iteration
+syntax: '=MM_ITERATIONS("Name", Size)'
+
+purpose: >
+  Defines iterations on the workbook on which the function is used.
+
+parameters:
+  Name:
+    required: true
+    type: string
+    description: Name of the iteration dimension.
+  Size:
+    required: true
+    type: integer
+    description: Number of iterations for the workbook.
+
+mind_behavior:
+  - Causes the workbook to be calculated multiple times for a single run.
+  - Can only be used once per workbook.
+
+excel_behavior:
+  - Defines intended iteration structure before upload.
+
+validation_rules:
+  - Only one MM_ITERATIONS function per workbook.
+  - Use when a workbook must run sequentially multiple times.
+  - Pair with iteration input/output flags where sequential values feed later iterations.
+
+common_mistakes:
+  - Using MM_ITERATIONS more than once in a workbook.
+  - Not defining iteration inputs/outputs when sequential dependency is required.
+  - Using workbook iterations when a normal loop would be sufficient.
+
+use_when:
+  - Workbook needs repeated sequential calculations.
+  - Output from one iteration feeds the next.
+
+avoid_when:
+  - Simple loop dimensions are sufficient.
+  - No sequential dependency exists.
+
+related_functions:
+  - MM_CURRENTITERATION
+  - MM_READITERATION
+  - /CalculationSteps
+  - /iterationinput
+  - /iterationoutput
+
+registry_status: core_v0_1
+```
+
+---
+
+## 7.2 MM_CURRENTITERATION
+
+```yaml
+function: MM_CURRENTITERATION
+category: Iteration
+syntax: '=MM_CURRENTITERATION()'
+
+purpose: >
+  Returns the index of the iteration that is selected or, if not visible, the
+  iteration that is calculated.
+
+parameters:
+  none:
+    required: false
+    type: none
+    description: No parameters.
+
+mind_behavior:
+  - If iteration results are saved for display, returns the selected iteration index.
+  - If not saved for display, may return the last available index for display.
+  - During calculations, returns the correct index for each calculated iteration.
+  - Can only be used on a workbook where iterations are defined.
+
+excel_behavior:
+  - Used in formulas that depend on the current iteration index.
+
+validation_rules:
+  - Workbook must have iterations defined.
+  - Do not use outside an iterated workbook.
+
+common_mistakes:
+  - Using without MM_ITERATIONS.
+  - Expecting displayed value and calculation-time value to always be the same.
+  - Using on a workbook without iteration logic.
+
+use_when:
+  - Formula needs current iteration index.
+
+avoid_when:
+  - Workbook does not use iterations.
+
+related_functions:
+  - MM_ITERATIONS
+  - MM_READITERATION
+
+registry_status: core_v0_1
+```
+
+---
+
+## 7.3 MM_READITERATION
+
+```yaml
+function: MM_READITERATION
+category: Iteration
+syntax: '=MM_READITERATION(Cell, Iteration)'
+
+purpose: >
+  Retrieves values from a specific iteration in another workbook on which
+  iterations were defined.
+
+parameters:
+  Cell:
+    required: true
+    type: cell
+    description: Cell to read. The cell is from another workbook on which iterations are defined.
+  Iteration:
+    required: true
+    type: integer
+    description: Index of the iteration to output.
+
+mind_behavior:
+  - Retrieves a specified iteration value from another workbook.
+  - Necessary because iteration loops exist only in the workbooks where iterations are defined.
+
+excel_behavior:
+  - Used in cross-workbook iteration lookup formulas.
+
+validation_rules:
+  - Cell should belong to another workbook with iterations defined.
+  - Do not use if Cell belongs to the same workbook as the MM_READITERATION formula.
+  - Inside the same workbook, iterations work like a regular loop and dependencies inherit the iteration loop.
+
+common_mistakes:
+  - Reading an iteration from the same workbook.
+  - Referencing a workbook where iterations are not defined.
+  - Using wrong iteration index.
+  - Forgetting that same-workbook iteration dependencies inherit the iteration loop automatically.
+
+use_when:
+  - Consolidation workbook needs results from a specific iteration in another workbook.
+
+avoid_when:
+  - The referenced cell is in the same workbook.
+
+related_functions:
+  - MM_ITERATIONS
+  - MM_CURRENTITERATION
+  - /CalculationSteps
+
+registry_status: core_v0_1
+```
+
+---
+
+# 8. Batch And Dynamic Output Functions For Later Expansion
+
+These functions are included as controlled placeholders. The skill may identify them, but should not generate detailed formulas for them until the registry is expanded.
+
+---
+
+## 8.1 MM_BATCHINDEX
+
+```yaml
+function: MM_BATCHINDEX
+category: Batch / Loop
+syntax: '=MM_BATCHINDEX()'
+
+purpose: >
+  Returns the index of the selected BATCH in Mind settings. Used with /batchresult
+  to create a BATCH loop for tables labeled with /batchresult.
+
+parameters:
+  none:
+    required: false
+    type: none
+    description: No parameters.
+
+known_rules:
+  - Used with /batchresult.
+  - Allows selected batch scenarios rather than always running all scenarios.
+  - When All is selected, Mind creates a BATCH loop for /batchresult tables.
+
+related_functions:
+  - MM_LOOP
+  - /batchresult
+
+registry_status: placeholder_expand_later
+```
+
+---
+
+## 8.2 MM_FILTER
+
+```yaml
+function: MM_FILTER
+category: Dynamic Range / Filter
+syntax: '=MM_FILTER(Key, Output1, [Output2], [Output3])'
+
+purpose: >
+  Filters specified ranges with a key range where 0 omits the value and 1
+  returns the value.
+
+parameters:
+  Key:
+    required: true
+    type: one_column_range
+    description: Range containing 0 or 1 flags.
+  Output1:
+    required: true
+    type: range
+    description: First range to return and filter.
+  Output2:
+    required: false
+    type: range
+    description: Optional second range to return and filter.
+  Output3:
+    required: false
+    type: range
+    description: Optional third range to return and filter.
+
+known_rules:
+  - Key must have one column.
+  - Key and output ranges must have compatible dimensions.
+  - Function must be used alone in a cell.
+  - MM_GETRANGE appears automatically.
+  - Leave empty space to the right and below because output resizes.
+  - Best practice is to input headers manually.
+
+related_functions:
+  - MM_GETRANGE
+  - MM_REMOVEDUPLICATES
+  - MM_HUNION
+  - MM_VUNION
+
+registry_status: placeholder_expand_later
+```
+
+---
+
+## 8.3 MM_REMOVEDUPLICATES
+
+```yaml
+function: MM_REMOVEDUPLICATES
+category: Dynamic Range / Filter
+syntax: '=MM_REMOVEDUPLICATES(Key, Output1, [Output2], [Output3])'
+
+purpose: >
+  Removes duplicates from the key range and filters output ranges accordingly.
+
+parameters:
+  Key:
+    required: true
+    type: one_column_range
+    description: Range from which to remove duplicates.
+  Output1:
+    required: true
+    type: range
+    description: First range to return and filter according to Key.
+  Output2:
+    required: false
+    type: range
+    description: Optional second range.
+  Output3:
+    required: false
+    type: range
+    description: Optional third range.
+
+known_rules:
+  - Key must have one column.
+  - Key and output ranges must have compatible dimensions.
+  - Function must be used alone in a cell.
+  - MM_GETRANGE appears automatically.
+  - Leave empty space to the right and below because output resizes.
+  - Best practice is to input headers manually.
+
+related_functions:
+  - MM_GETRANGE
+  - MM_FILTER
+
+registry_status: placeholder_expand_later
+```
+
+---
+
+## 8.4 MM_HUNION
+
+```yaml
+function: MM_HUNION
+category: Dynamic Range / Union
+syntax: '=MM_HUNION(RangeOutput, [RangeOutput2], [RangeOutput3], [...])'
+
+purpose: >
+  Binds ranges horizontally.
+
+parameters:
+  RangeOutput:
+    required: true
+    type: range
+    description: First range to bind.
+  RangeOutput2_plus:
+    required: false
+    type: range
+    description: Additional ranges to bind horizontally.
+
+known_rules:
+  - Must be used alone in a cell.
+  - Additional ranges must have at least the same number of rows as prior ranges.
+  - Best practice is to input headers manually.
+  - MM_GETRANGE appears automatically.
+  - Inconsistent range sizes return NaN.
+
+related_functions:
+  - MM_VUNION
+  - MM_GETRANGE
+
+registry_status: placeholder_expand_later
+```
+
+---
+
+## 8.5 MM_VUNION
+
+```yaml
+function: MM_VUNION
+category: Dynamic Range / Union
+syntax: '=MM_VUNION(RangeOutput, [RangeOutput2], [RangeOutput3], [...])'
+
+purpose: >
+  Binds ranges vertically.
+
+parameters:
+  RangeOutput:
+    required: true
+    type: range
+    description: First range to bind.
+  RangeOutput2_plus:
+    required: false
+    type: range
+    description: Additional ranges to bind vertically.
+
+known_rules:
+  - Must be used alone in a cell.
+  - MM_GETRANGE appears automatically for dynamic output.
+  - Headers should be handled manually where appropriate.
+  - Exact detailed validation should be added in registry v0.2.
+
+related_functions:
+  - MM_HUNION
+  - MM_GETRANGE
+
+registry_status: placeholder_expand_later
+```
+
+---
+
+# 9. General Formula Validation Rules
+
+## 9.1 Loop Names
+
+Loop names are case-sensitive.
+
+The skill must treat these as different loops:
+
+```text
+Scenario
+scenario
+SCENARIO
+```
+
+## 9.2 Empty Parameters
+
+Mind does not accept empty parameters in function calls where optional earlier parameters must be supplied before later parameters.
+
+When optional placeholders are required, use:
+
+```excel
+""
+```
+
+not a blank argument.
+
+## 9.3 Criteria Strings
+
+When criteria include logical operators, write them as strings:
+
+```excel
+">0"
+">12.5"
+"<=100"
+```
+
+Use a decimal point in string criteria.
+
+## 9.4 Excel vs Mind Differences
+
+The skill must warn when using functions that can behave differently in Excel and Mind, especially:
+
+```text
+MM_ROW
+MM_COLUMN
+MM_TABLE
+MM_LASTROW
+MM_LASTROWCELL
+MM_LASTCOLUMN
+MM_LASTCOLUMNCELL
+MM_RANGE
+MM_SETSIZE
+```
+
+## 9.5 Dynamic Tables
+
+For dynamic table formulas:
+
+- Prefer MM_TABLE, MM_ROW, MM_COLUMN, MM_LASTROWCELL, and MM_LASTCOLUMNCELL instead of fixed references.
+- Review empty cells carefully.
+- Confirm that Excel preview behaviour may not match Mind calculation behaviour.
+- Confirm whether the dynamic table is affected by Input Manager, interlinks, instances, or MM_SETSIZE.
+
+## 9.6 Multidimensional Criteria Functions
+
+For these functions:
+
+```text
+MM_SUMIF
+MM_SUMIFS
+MM_COUNTIF
+MM_COUNTIFS
+MM_AVERAGEIF
+MM_AVERAGEIFS
+```
+
+the skill must check:
+
+- loop name case
+- simulation selectors using "SIM"
+- placeholder arguments
+- range size consistency
+- dimension consistency
+- criteria string formatting
+- whether Excel native function should be used instead when no multidimensional behaviour exists
+
+## 9.7 Simulation Dimension
+
+Use:
+
+```excel
+"SIM"
+```
+
+when selecting simulation-specific dimensions in supported functions.
+
+The skill must not invent alternative simulation dimension names.
+
+## 9.8 Unsupported MM Functions
+
+If an MM function appears in a workbook but is not listed in this registry, the skill may identify its presence but must not rewrite it or generate syntax for it.
+
+The required response is:
+
+```text
+Function not in registry. Do not auto-generate or auto-correct this formula until the registry is expanded.
+```
+
+---
+
+# 10. Skill Behaviour Requirements
+
+## 10.1 Formula Generation
+
+When generating formulas, the skill must:
+
+1. Select the correct MM function from this registry.
+2. Use documented syntax only.
+3. Explain assumptions.
+4. Flag potential Excel-vs-Mind behaviour differences.
+5. Avoid changing actuarial logic unless explicitly requested.
+
+## 10.2 Formula Review
+
+When reviewing formulas, the skill must classify findings as:
+
+```text
+BLOCKER
+HIGH
+MEDIUM
+LOW
+INFO
+```
+
+## 10.3 Formula Modification
+
+The skill may recommend formula changes, but must separate:
+
+```text
+Safe syntactic fixes
+Modeling logic changes
+Actuarial review required
+```
+
+## 10.4 No Hallucinated Syntax
+
+The skill must never invent:
+
+- parameters
+- optional arguments
+- return behaviour
+- Mind-specific syntax
+- Excel/Mind compatibility claims
+
+## 10.5 Workbook-Aware Formula Advice
+
+When advising on formulas, the skill should check whether the formula interacts with:
+
+- dynamic grids
+- loops
+- simulations
+- instances
+- partial load
+- iteration logic
+- input manager
+- export manager
+- interlinks
+
+## 10.6 Conservative Default
+
+When unsure, the skill must prefer:
+
+```text
+Do not auto-fix. Flag for model review.
+```
+
+---
+
+# 11. Next Registry Expansion Targets
+
+The next version of this registry should expand:
+
+```text
+MM_LOOPLABELS
+MM_LOOPINSTANCE
+MM_RANGE
+MM_FILTER
+MM_REMOVEDUPLICATES
+MM_HUNION
+MM_VUNION
+MM_GROUPBY
+MM_MATCH
+MM_SORTDIM
+MM_SORTRANGE
+MM_RANK
+MM_BATCHINDEX
+MM_AOCVALUE
+MM_AOCSTATUS
+MM_SENSITIVITY
+MM_SENSITIVITYLABELS
+MM_INPUTSTATUS
+MM_GOALSEEK
+MM_CURRENTUSER
+MM_CURRENTUSERMAIL
+MM_PROJECTNAME
+MM_PROJECTGUID
+MM_LASTCHANGEDBY
+MM_LASTCHANGEDDATE
+MM_RISKMEASURESLIST
+MM_DISTRIBUTIONSLIST
+MM_PARAMNAME
+MM_RANDOM
+MM_RANDOMIZE
+MM_SIMULATE
+MM_SIMULATE_MS
+MM_SIMULATE_TRUNC
+MM_SIMULATE_MS_TRUNC
+MM_SIMINDEXQUANTILE
+MM_SIMQUANTILE
+```
+
+---
+
+# 12. Definition Of Done For Registry v0.1
+
+This registry is considered complete for first MVP use when the skill can safely:
+
+- identify core MM functions
+- validate exact syntax
+- flag missing arguments
+- warn about empty parameters
+- distinguish Excel vs Mind behaviour
+- check loop name case issues
+- check simulation selector usage
+- review dynamic table formulas
+- review instance formulas
+- review iteration formulas
+- review criteria-based aggregation formulas
+- warn when Excel native functions are more appropriate
+- refuse unsupported MM functions
+- recommend model review when formula changes may affect actuarial logic
+
+---
+
+# 13. MVP Function Coverage
+
+The registry v0.1 covers these functions sufficiently for first audit and formula-review use:
+
+```text
+MM_LOOP
+MM_RESULT
+MM_DIMINDEX
+MM_DIMSIZE
+MM_SETSIZE
+MM_GETRANGE
+MM_TABLE
+MM_ROW
+MM_COLUMN
+MM_LASTROW
+MM_LASTROWCELL
+MM_LASTCOLUMN
+MM_LASTCOLUMNCELL
+MM_RANGE
+MM_READTABLE
+MM_READTABLENAN
+MM_SUM
+MM_SUMIF
+MM_SUMIFS
+MM_COUNTIF
+MM_COUNTIFS
+MM_AVERAGEIF
+MM_AVERAGEIFS
+MM_INSTANCE
+MM_INSTINDEX
+MM_INSTANCEKEY
+MM_ISINSTANCELOADED
+MM_ITERATIONS
+MM_CURRENTITERATION
+MM_READITERATION
+```
+
+The registry v0.1 includes controlled placeholders for:
+
+```text
+MM_BATCHINDEX
+MM_FILTER
+MM_REMOVEDUPLICATES
+MM_HUNION
+MM_VUNION
+```
+
+The skill must not treat placeholder functions as fully validated until they are expanded.
+
+---
+
+# 14. Final Instruction To The Skill
+
+When using this registry, always behave as a cautious Milliman Mind model reviewer.
+
+Prefer:
+
+```text
+explain
+validate
+flag risk
+recommend review
+```
+
+before:
+
+```text
+auto-fix
+rewrite
+replace
+optimize
+```
+
+The goal is not only to make formulas valid, but to keep the workbook safe for Milliman Mind upload and actuarial review.

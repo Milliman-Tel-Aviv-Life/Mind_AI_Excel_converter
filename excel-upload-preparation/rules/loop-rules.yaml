@@ -1,0 +1,296 @@
+version: 1.0.0
+rules:
+- id: LBL-001
+  version: 1.0.0
+  status: active
+  category: loop
+  description: MM_LOOPLABELS labels match the size of the referenced loop.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: CompleteMindDocn.docx
+    article: mm-looplabels-function
+    section: Remarks
+  validation:
+    deterministic: true
+    implementation: validators.loop.label_size_matches
+  correction:
+    automatic: false
+  on_unevaluable: REQUIRES_USER_INPUT
+- id: LOOP-001
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'MM_LOOP Inventory -- Inventory: =MM_LOOP()'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LOOP-001
+  validation:
+    deterministic: true
+    implementation: validators.loop.mm_loop_inventory
+  correction:
+    automatic: false
+  on_unevaluable: REQUIRES_USER_INPUT
+  severity_source: HIGH
+- id: LOOP-002
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'Naming Consistency -- Pass if: Loop names are consistent.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LOOP-002
+  validation:
+    deterministic: true
+    implementation: validators.loop.loop_naming_consistency
+  correction:
+    automatic: false
+  on_unevaluable: REQUIRES_USER_INPUT
+  pass_if: Loop names are consistent.
+  severity_source: HIGH
+- id: LOOP-003
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'Repeated Definitions -- Pass if: Ranges have identical lengths.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LOOP-003
+  validation:
+    deterministic: true
+    implementation: validators.loop.repeated_definition_range_lengths
+  correction:
+    automatic: false
+  on_unevaluable: REQUIRES_USER_INPUT
+  pass_if: Ranges have identical lengths.
+  severity_source: HIGH
+- id: LOOP-004
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'Dynamic Instance Loops -- Review use of: MM_LOOPINSTANCE'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LOOP-004
+  validation:
+    deterministic: false
+    implementation: validators.loop.loop_004
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: RES-001
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'MM_RESULT Inventory -- Inventory: =MM_RESULT()'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RES-001
+  validation:
+    deterministic: false
+    implementation: validators.loop.res_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: RES-002
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'Loop References -- Pass if: Loop names match exactly.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RES-002
+  validation:
+    deterministic: false
+    implementation: validators.loop.res_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if: Loop names match exactly.
+  severity_source: HIGH
+- id: RES-003
+  version: 1.0.0
+  status: active
+  category: loop
+  description: Summed Dimensions -- Identify omitted dimensions.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RES-003
+  validation:
+    deterministic: false
+    implementation: validators.loop.res_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: RES-004
+  version: 1.0.0
+  status: active
+  category: loop
+  description: Duplicate Loop References
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RES-004
+  validation:
+    deterministic: false
+    implementation: validators.loop.res_004
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  fail_if: Same loop is specified more than once.
+  severity_source: HIGH
+- id: RES-005
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'Simulation References -- Review: SIM dimension usage'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RES-005
+  validation:
+    deterministic: false
+    implementation: validators.loop.res_005
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: RZS-001
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'MM_SETSIZE Inventory -- Inventory all: MM_SETSIZE'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RZS-001
+  validation:
+    deterministic: false
+    implementation: validators.loop.rzs_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: RZS-002
+  version: 1.0.0
+  status: active
+  category: loop
+  description: MM_SETSIZE Syntax -- Validate syntax.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RZS-002
+  validation:
+    deterministic: false
+    implementation: validators.loop.rzs_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: RZS-003
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'Resize Destination Cells -- Pass if: Destination cells are empty.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RZS-003
+  validation:
+    deterministic: false
+    implementation: validators.loop.rzs_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if: Destination cells are empty.
+  severity_source: HIGH
+- id: RZS-004
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'Resize Flags -- Inventory: /Resize /ResizeRow /ResizeColumn'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RZS-004
+  validation:
+    deterministic: false
+    implementation: validators.loop.rzs_004
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: RZS-005
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'Named Resize Groups -- Validate: /ResizeRow.Name /Resize.Name /ResizeColumn.Name'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RZS-005
+  validation:
+    deterministic: false
+    implementation: validators.loop.rzs_005
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: RZS-006
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'Dynamic References -- Audit: MM_LASTROWCELL MM_LASTCOLUMNCELL'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RZS-006
+  validation:
+    deterministic: false
+    implementation: validators.loop.rzs_006
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: RZS-007
+  version: 1.0.0
+  status: active
+  category: loop
+  description: 'Dynamic Helper Functions -- Inventory: MM_GETRANGE'
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RZS-007
+  validation:
+    deterministic: false
+    implementation: validators.loop.rzs_007
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: INFO

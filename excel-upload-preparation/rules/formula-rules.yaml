@@ -1,0 +1,92 @@
+version: 1.0.0
+rules:
+- id: FORMULA-002
+  version: 1.0.0
+  status: active
+  category: formula
+  description: VBA functions are not directly compatible with Mind.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: CompleteMindDocn.docx
+    article: extensions
+  validation:
+    deterministic: true
+    implementation: validators.formula.detect_vba_udf_calls
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+- id: FRM-001
+  version: 1.0.0
+  status: active
+  category: formula
+  description: Formula Inventory -- Audit every formula used.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: FRM-001
+  validation:
+    deterministic: false
+    implementation: validators.formula.frm_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: BLOCKER
+- id: FRM-002
+  version: 1.0.0
+  status: active
+  category: formula
+  description: Unsupported Functions
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: FRM-002
+  validation:
+    deterministic: true
+    implementation: validators.formula.unsupported_functions
+  correction:
+    automatic: false
+  on_unevaluable: REQUIRES_USER_INPUT
+  pass_if:
+  - Every function appears on Mind supported list.
+  fail_if:
+  - Unsupported function exists.
+  severity_source: BLOCKER
+- id: FRM-003
+  version: 1.0.0
+  status: active
+  category: formula
+  description: 'Dynamic Arrays -- Review: - @ operator - spilled ranges - Office 365 dynamic array behaviour'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: FRM-003
+  validation:
+    deterministic: false
+    implementation: validators.formula.frm_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: FRM-004
+  version: 1.0.0
+  status: active
+  category: formula
+  description: VBA
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: FRM-004
+  validation:
+    deterministic: true
+    implementation: validators.formula.vba_presence
+  correction:
+    automatic: false
+  on_unevaluable: REQUIRES_USER_INPUT
+  fail_if:
+  - VBA logic is required.
+  severity_source: BLOCKER

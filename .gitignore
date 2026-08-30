@@ -1,0 +1,36 @@
+# --- client data: never in the repo ---
+*.xlsx
+*.xlsm
+*.xlsb
+*.xls
+Shlomo_*
+shlomo_result.*
+excel-upload-preparation/runs/
+excel-upload-preparation/**/*.changelog.json
+
+# --- secrets / local state ---
+secret.key
+config.enc
+.env
+.env.*
+mind_session.json
+*.pem
+*.pfx
+
+# --- working copies and scratch ---
+New Text Document*.txt
+excel-upload-preparation-shlomo/
+New/
+*.zip
+excel-upload-preparation/PACKAGE_INVENTORY.json
+
+# --- python ---
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+venv/
+
+# --- node (the built dist/ IS committed so a clone runs without Node) ---
+FigmaOutput/node_modules/
+FigmaOutput/.vite/

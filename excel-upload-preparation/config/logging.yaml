@@ -1,0 +1,4 @@
+level: INFO
+include_workbook_values: false
+include_api_secrets: false
+change_log_external_only: true

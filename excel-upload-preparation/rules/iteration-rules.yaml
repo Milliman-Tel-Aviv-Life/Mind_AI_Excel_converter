@@ -1,0 +1,87 @@
+version: 1.0.0
+rules:
+- id: CAL-001
+  version: 1.0.0
+  status: active
+  category: iteration
+  description: 'Calculation Steps -- Inventory: /CalculationSteps'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: CAL-001
+  validation:
+    deterministic: false
+    implementation: validators.iteration.cal_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: CAL-002
+  version: 1.0.0
+  status: active
+  category: iteration
+  description: Step Ordering -- Validate workbook ordering.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: CAL-002
+  validation:
+    deterministic: false
+    implementation: validators.iteration.cal_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: CAL-003
+  version: 1.0.0
+  status: active
+  category: iteration
+  description: Parallelization Review -- Identify parallel opportunities.
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: CAL-003
+  validation:
+    deterministic: false
+    implementation: validators.iteration.cal_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: LOW
+- id: CAL-004
+  version: 1.0.0
+  status: active
+  category: iteration
+  description: 'Iteration Functions -- Inventory: MM_ITERATIONS'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: CAL-004
+  validation:
+    deterministic: false
+    implementation: validators.iteration.cal_004
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: CAL-005
+  version: 1.0.0
+  status: active
+  category: iteration
+  description: 'Iteration Inputs -- Inventory: /iterationinput /iterationoutput'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: CAL-005
+  validation:
+    deterministic: false
+    implementation: validators.iteration.cal_005
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM

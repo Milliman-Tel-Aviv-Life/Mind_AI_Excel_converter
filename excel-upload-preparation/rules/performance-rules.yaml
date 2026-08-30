@@ -1,0 +1,104 @@
+version: 1.0.0
+rules:
+- id: DBG-001
+  version: 1.0.0
+  status: active
+  category: performance
+  description: Debug Mode Recommendation -- Provide recommendation.
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: DBG-001
+  validation:
+    deterministic: false
+    implementation: validators.performance.dbg_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: INFO
+- id: DBG-002
+  version: 1.0.0
+  status: active
+  category: performance
+  description: Performance Profiler Recommendation -- Provide recommendation.
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: DBG-002
+  validation:
+    deterministic: false
+    implementation: validators.performance.dbg_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: INFO
+- id: DBG-003
+  version: 1.0.0
+  status: active
+  category: performance
+  description: Large Range References -- Review formula efficiency.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: DBG-003
+  validation:
+    deterministic: false
+    implementation: validators.performance.dbg_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: DBG-004
+  version: 1.0.0
+  status: active
+  category: performance
+  description: 'Lookup Performance -- Review: VLOOKUP LOOKUP MATCH'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: DBG-004
+  validation:
+    deterministic: false
+    implementation: validators.performance.dbg_004
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: DBG-005
+  version: 1.0.0
+  status: active
+  category: performance
+  description: Dependency Analysis -- Recommend dependency analysis when required.
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: DBG-005
+  validation:
+    deterministic: false
+    implementation: validators.performance.dbg_005
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: INFO
+- id: DBG-006
+  version: 1.0.0
+  status: active
+  category: performance
+  description: Partial Evaluation -- Recommend F9 evaluation workflow.
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: DBG-006
+  validation:
+    deterministic: false
+    implementation: validators.performance.dbg_006
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: INFO

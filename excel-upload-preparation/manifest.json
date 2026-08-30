@@ -1,0 +1,39 @@
+{
+  "name": "excel-upload-preparation",
+  "version": "1.6.6",
+  "ruleSetVersion": "1.2.0",
+  "schemaVersion": "1.0.0",
+  "entrypoint": "SKILL.md",
+  "modes": [
+    "PLAN_MODE",
+    "PREP_MIND_LOOPS",
+    "FIX_INCOMPATIBLE_FORMULAS",
+    "STRUCTURE_FIX"
+  ],
+  "statuses": [
+    "PASS",
+    "WARNING",
+    "ERROR",
+    "REQUIRES_USER_INPUT",
+    "NOT_SUPPORTED"
+  ],
+  "schemas": {
+    "analysis": "schemas/workbook-analysis.schema.json",
+    "validation": "schemas/validation-report.schema.json",
+    "changes": "schemas/change-set.schema.json",
+    "question": "schemas/user-question.schema.json",
+    "result": "schemas/processing-result.schema.json"
+  },
+  "references": {
+    "mmFunctionRegistry": "references/mm-function-registry.yaml",
+    "mmFunctionRegistryKb": "references/mm-function-registry-kb.yaml",
+    "supportedExcelFunctions": "references/supported-excel-functions.yaml",
+    "mindFlags": "references/mind-flags.yaml"
+  },
+  "web": {
+    "backend": "app/web/server.py",
+    "frontend": "../FigmaOutput",
+    "launcher": "run_mind_ready_web.bat",
+    "port": 8600
+  }
+}

@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ProcessingResult",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "request_id": {
+      "type": "string"
+    },
+    "mode": {
+      "enum": [
+        "PLAN_MODE",
+        "PREP_MIND_LOOPS",
+        "FIX_INCOMPATIBLE_FORMULAS",
+        "STRUCTURE_FIX"
+      ]
+    },
+    "status": {
+      "enum": [
+        "PASS",
+        "WARNING",
+        "ERROR",
+        "REQUIRES_USER_INPUT",
+        "NOT_SUPPORTED"
+      ]
+    },
+    "upload_readiness": {
+      "type": "object"
+    },
+    "source": {
+      "type": "object"
+    },
+    "output": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "questions": {
+      "type": "array"
+    },
+    "warnings": {
+      "type": "array"
+    },
+    "unsupported_features": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "request_id",
+    "mode",
+    "status",
+    "upload_readiness",
+    "source",
+    "questions",
+    "warnings",
+    "unsupported_features"
+  ],
+  "additionalProperties": false
+}

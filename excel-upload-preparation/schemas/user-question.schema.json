@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "UserQuestion",
+  "type": "object",
+  "properties": {
+    "question_id": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "OPEN",
+        "ANSWERED",
+        "CANCELLED"
+      ]
+    },
+    "blocking": {
+      "type": "boolean"
+    },
+    "rule_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "location": {
+      "type": "object"
+    },
+    "question": {
+      "type": "string"
+    },
+    "options": {
+      "type": "array"
+    },
+    "default_if_unanswered": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "question_id",
+    "status",
+    "blocking",
+    "rule_ids",
+    "question",
+    "options",
+    "default_if_unanswered"
+  ],
+  "additionalProperties": false
+}

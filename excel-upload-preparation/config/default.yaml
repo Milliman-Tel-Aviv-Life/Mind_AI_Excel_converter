@@ -1,0 +1,11 @@
+package_version: 1.6.6
+rule_set_version: 1.2.0
+default_mode: PLAN_MODE
+copy_only: true
+allowed_output_formats: [xlsx, xlsm]
+require_recalculation_for_pass: true
+multiple_workbook_context:
+  enabled: false
+  reserved: true
+# DBG-003: ranges above this many cells (or whole columns/rows) are flagged
+large_range_cells: 50000

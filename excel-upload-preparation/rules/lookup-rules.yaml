@@ -1,0 +1,87 @@
+version: 1.0.0
+rules:
+- id: LKP-001
+  version: 1.0.0
+  status: active
+  category: lookup
+  description: 'MM_READTABLE Inventory -- Inventory: MM_READTABLE'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LKP-001
+  validation:
+    deterministic: false
+    implementation: validators.lookup.lkp_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: LKP-002
+  version: 1.0.0
+  status: active
+  category: lookup
+  description: Header Inclusion -- Headers must be included.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LKP-002
+  validation:
+    deterministic: false
+    implementation: validators.lookup.lkp_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: LKP-003
+  version: 1.0.0
+  status: active
+  category: lookup
+  description: Unique Output Header -- Validate output header.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LKP-003
+  validation:
+    deterministic: false
+    implementation: validators.lookup.lkp_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: LKP-004
+  version: 1.0.0
+  status: active
+  category: lookup
+  description: Duplicate Result Handling -- Review first-match behaviour.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LKP-004
+  validation:
+    deterministic: false
+    implementation: validators.lookup.lkp_004
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: LKP-005
+  version: 1.0.0
+  status: active
+  category: lookup
+  description: 'NaN Behaviour -- Review: MM_READTABLE MM_READTABLENAN'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LKP-005
+  validation:
+    deterministic: false
+    implementation: validators.lookup.lkp_005
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM

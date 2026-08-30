@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WorkbookAnalysis",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "string"
+    },
+    "analysis_id": {
+      "type": "string"
+    },
+    "source": {
+      "type": "object"
+    },
+    "workbooks": {
+      "type": "array"
+    },
+    "features": {
+      "type": "object"
+    },
+    "risks": {
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "analysis_id",
+    "source",
+    "workbooks",
+    "features",
+    "risks"
+  ],
+  "additionalProperties": false
+}

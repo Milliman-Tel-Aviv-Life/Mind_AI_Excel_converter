@@ -1,0 +1,178 @@
+version: 1.0.0
+rules:
+- id: INP-001
+  version: 1.0.0
+  status: active
+  category: io
+  description: 'Input Grid Inventory -- Inventory: /Input'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: INP-001
+  validation:
+    deterministic: false
+    implementation: validators.io.inp_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: INP-002
+  version: 1.0.0
+  status: active
+  category: io
+  description: Naming Convention -- Grid names should align with import strategy.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: INP-002
+  validation:
+    deterministic: false
+    implementation: validators.io.inp_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: INP-003
+  version: 1.0.0
+  status: active
+  category: io
+  description: 'Input Settings -- Inventory: /InputSettings'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: INP-003
+  validation:
+    deterministic: false
+    implementation: validators.io.inp_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: INP-004
+  version: 1.0.0
+  status: active
+  category: io
+  description: 'Filename Patterns -- Validate: {GridName} {ModelName} {InstanceName} {*}'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: INP-004
+  validation:
+    deterministic: false
+    implementation: validators.io.inp_004
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: INP-005
+  version: 1.0.0
+  status: active
+  category: io
+  description: 'Reorder Support -- Pass if: Grid has /Input; Grid has headers; No duplicate headers'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: INP-005
+  validation:
+    deterministic: false
+    implementation: validators.io.inp_005
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - Grid has /Input
+  - Grid has headers
+  - No duplicate headers
+  severity_source: HIGH
+- id: INP-006
+  version: 1.0.0
+  status: active
+  category: io
+  description: Format Checking -- Review project setting.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: INP-006
+  validation:
+    deterministic: false
+    implementation: validators.io.inp_006
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: EXP-001
+  version: 1.0.0
+  status: active
+  category: io
+  description: 'Export Grid Inventory -- Inventory: /Export'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: EXP-001
+  validation:
+    deterministic: false
+    implementation: validators.io.exp_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: EXP-002
+  version: 1.0.0
+  status: active
+  category: io
+  description: 'Export Settings Inventory -- Inventory: /ExportSettings'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: EXP-002
+  validation:
+    deterministic: false
+    implementation: validators.io.exp_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: EXP-003
+  version: 1.0.0
+  status: active
+  category: io
+  description: 'Export Column Validation -- Validate: GridName ExportByInstance ExportNoInstanceKeys ExportByLoop
+    ExportNoLoopKeys Separator Culture Headers SubHeaders IncludeHiddenData FileNamePattern FileExtension
+    Locked AllowScientificFormat'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: EXP-003
+  validation:
+    deterministic: false
+    implementation: validators.io.exp_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: EXP-004
+  version: 1.0.0
+  status: active
+  category: io
+  description: 'Filename Pattern Validation -- Review: {ModelName} {GridName} {InstanceName} {LoopsLabels}'
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: EXP-004
+  validation:
+    deterministic: false
+    implementation: validators.io.exp_004
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: LOW

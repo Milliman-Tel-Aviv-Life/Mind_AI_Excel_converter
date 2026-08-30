@@ -1,0 +1,9 @@
+sources:
+  - id: complete-mind-documentation
+    file: CompleteMindDocn.docx
+    role: domain_documentation
+    notebook_reference_id: turn4search6
+  - id: skill-format-guidance
+    file: SkillInstructions.page
+    role: package_format_guidance
+    notebook_reference_id: turn4search7

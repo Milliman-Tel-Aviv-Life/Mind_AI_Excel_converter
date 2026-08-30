@@ -1,0 +1,71 @@
+version: 1.0.0
+rules:
+- id: PAR-001
+  version: 1.0.0
+  status: active
+  category: parameter
+  description: 'Parameters Inventory -- Inventory: /Parameters'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: PAR-001
+  validation:
+    deterministic: false
+    implementation: validators.parameter.par_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: PAR-002
+  version: 1.0.0
+  status: active
+  category: parameter
+  description: 'Structure Validation -- Required columns: Label Type PossibleValues Values'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: PAR-002
+  validation:
+    deterministic: false
+    implementation: validators.parameter.par_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: PAR-003
+  version: 1.0.0
+  status: active
+  category: parameter
+  description: 'Type Validation -- Allowed: number text switch checkbox radio slider dropdown percentage
+    date'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: PAR-003
+  validation:
+    deterministic: false
+    implementation: validators.parameter.par_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: PAR-004
+  version: 1.0.0
+  status: active
+  category: parameter
+  description: PossibleValues Validation -- Review definition syntax.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: PAR-004
+  validation:
+    deterministic: false
+    implementation: validators.parameter.par_004
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM

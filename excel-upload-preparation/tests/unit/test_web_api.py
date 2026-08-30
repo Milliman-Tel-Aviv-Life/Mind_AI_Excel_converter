@@ -1,0 +1,298 @@
+"""1.6.0: the FastAPI backend behind the Figma-built front-end (app/web/server.py),
+exercised through FastAPI's TestClient against the synthetic fixtures. The
+assistant call is mocked; the apply/report paths use Excel when it is
+available (they fall back to openpyxl otherwise, which the test tolerates)."""
+from pathlib import Path
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app import chat_context
+from app.excel_com import com_available
+from app.web import server
+
+
+@pytest.fixture(scope="module")
+def client():
+    return TestClient(server.app)
+
+
+def _upload(client, path: Path, mode: str = "plan") -> dict:
+    with path.open("rb") as f:
+        res = client.post("/api/sessions", files={"file": (path.name, f, "application/octet-stream")}, data={"mode": mode})
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def test_health_reports_engine_facts(client):
+    body = client.get("/api/health").json()
+    assert body["rules"] == 96 and isinstance(body["excel"], bool) and isinstance(body["assistant"], bool)
+
+
+def test_upload_returns_the_front_end_contracts(client, flagged_model_broken_xlsx):
+    body = _upload(client, flagged_model_broken_xlsx)
+    assert set(body) >= {"sessionId", "summary", "report", "plan", "version"}
+    summary, report, plan, version = body["summary"], body["report"], body["plan"], body["version"]
+    assert summary["file_name"] == "flagged_model_broken.xlsx" and summary["file_type"] == "xlsx"
+    assert {s["name"] for s in summary["sheets"]} == {"Model", "Settings", "Outputs"}
+    grid = next(g for s in summary["sheets"] for g in s["grids"] if g["anchor"] == "A4")
+    assert grid["title"] == "#Assumptions /Reorder /Inpt" and sorted(grid["flag_names"]) == ["inpt", "reorder"]
+    assert set(grid) >= {"display_name", "ref", "header_values", "inner_title_cells", "formula_count"}
+    assert report["status"] == "NOT_SUPPORTED" and report["summary"]["finding_count"] == 96
+    assert all({"rule_id", "status", "confidence", "evidence", "location", "message", "readiness_impact", "correction_available", "source"} <= set(f) for f in report["findings"])
+    assert {a["id"] for a in plan} >= {"flag_spelling", "loop_name_case", "create_grid_titles"}
+    assert version["id"] == "ver-001" and version["source"] == "upload" and version["label"].startswith("v1")
+
+
+def test_mode_filters_rules_and_bad_inputs_are_rejected(client, plain_grid_xlsx):
+    body = _upload(client, plain_grid_xlsx, mode="fix_formulas")
+    categories = {f["rule_id"].split("-")[0] for f in body["report"]["findings"]}
+    assert categories <= {"FILE", "READY", "FRM", "FORMULA"}
+    with plain_grid_xlsx.open("rb") as f:
+        assert client.post("/api/sessions", files={"file": ("x.csv", f, "text/csv")}, data={"mode": "plan"}).status_code == 422
+    with plain_grid_xlsx.open("rb") as f:
+        assert client.post("/api/sessions", files={"file": ("x.xlsx", f, "application/octet-stream")}, data={"mode": "nope"}).status_code == 422
+    assert client.get("/api/sessions/does-not-exist/versions").status_code == 404
+
+
+def test_apply_creates_a_verified_version_and_reanalyzes(client, flagged_model_broken_xlsx):
+    body = _upload(client, flagged_model_broken_xlsx)
+    sid = body["sessionId"]
+    plan = {a["id"]: a for a in body["plan"]}
+    ops = plan["flag_spelling"]["operations"] + plan["special_headers"]["operations"]
+    res = client.post(f"/api/sessions/{sid}/apply", json={"operations": ops, "reanalyze": True})
+    assert res.status_code == 200, res.text
+    out = res.json()
+    assert out["result"]["status"] == "APPLIED"
+    assert out["result"]["output_name"].endswith(".xlsx") and out["version"]["id"] == "ver-002" and out["version"]["source"] == "prep"
+    assert len(out["version"]["change_log"]) == len(ops)
+    # the re-analysis of the new file is included and reflects the corrections
+    statuses = {f["rule_id"]: f["status"] for f in out["report"]["findings"]}
+    assert statuses["FLG-001"] == "PASS" and statuses["PAR-002"] == "PASS"
+    # download by the name the front-end was given
+    dl = client.get(f"/api/sessions/{sid}/files/{out['result']['output_name']}")
+    assert dl.status_code == 200 and dl.content[:2] == b"PK"
+    versions = client.get(f"/api/sessions/{sid}/versions").json()
+    assert [v["id"] for v in versions] == ["ver-001", "ver-002"]
+    # applying again works on the produced file and yields v3 with a distinct download name
+    res2 = client.post(f"/api/sessions/{sid}/apply", json={"operations": plan["loop_name_case"]["operations"], "reanalyze": False}).json()
+    assert res2["version"]["id"] == "ver-003" and res2["result"]["output_name"] != out["result"]["output_name"]
+    assert client.post(f"/api/sessions/{sid}/apply", json={"operations": [{"op": "explode", "sheet": "Model"}]}).status_code == 422
+
+
+def test_chat_returns_reply_and_validated_proposal(client, flagged_model_broken_xlsx, monkeypatch):
+    body = _upload(client, flagged_model_broken_xlsx)
+    sid = body["sessionId"]
+
+    def fake_chat(messages, system_prompt, **kwargs):
+        assert any("Model" in m["content"] for m in messages) or "Model" in system_prompt
+        return {"available": True, "text": 'Renaming.\n```changes\n{"summary": "rename", "operations": [{"op": "rename_sheet", "sheet": "Settings", "new_name": "Config"}, {"op": "set_value", "sheet": "Nope", "cell": "A1", "value": 1}]}\n```', "message": None}
+
+    monkeypatch.setattr(chat_context, "chat_completion", fake_chat)
+    res = client.post(f"/api/sessions/{sid}/chat", json={"history": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello", "note": True}], "question": "rename Settings to Config"})
+    assert res.status_code == 200, res.text
+    reply = res.json()
+    assert reply["text"] == "Renaming." and reply["provenance"]["context_chars"] > 1000
+    assert [o["op"] for o in reply["proposal"]["operations"]] == ["rename_sheet"] and reply["proposal"]["summary"] == "rename"
+    assert len(reply["proposal"]["errors"]) == 1
+    assert client.post(f"/api/sessions/{sid}/chat", json={"history": [], "question": "   "}).status_code == 422
+
+
+def test_reports_and_recalculate_endpoints(client, plain_grid_xlsx):
+    body = _upload(client, plain_grid_xlsx)
+    sid = body["sessionId"]
+    rep = client.post(f"/api/sessions/{sid}/reports").json()
+    assert rep["standalone_name"].endswith("_mind_readiness_report.xlsx") and rep["workbook_name"].endswith(".xlsx")
+    assert client.get(f"/api/sessions/{sid}/files/{rep['standalone_name']}").content[:2] == b"PK"
+    rc = client.post(f"/api/sessions/{sid}/recalculate").json()
+    assert rc["status"] in ("PASS", "ERROR", "NOT_SUPPORTED", "WARNING")
+    assert isinstance(rc["formula_errors"], list) and isinstance(rc["addin_gap_errors"], list)
+# --- 1.6.1: re-analysis delta + finding-focused chat -------------------------------------
+
+
+def test_apply_and_reanalyze_report_a_delta_and_fixability(client, flagged_model_broken_xlsx):
+    body = _upload(client, flagged_model_broken_xlsx)
+    sid = body["sessionId"]
+    findings = {f["rule_id"]: f for f in body["report"]["findings"]}
+    # "Fix available" now reflects the prep plan, not the YAML flag
+    assert findings["FLG-001"]["correction_available"] is True and findings["PAR-002"]["correction_available"] is True
+    assert findings["UNQ-001"]["correction_available"] is False
+    plan = {a["id"]: a for a in body["plan"]}
+    out = client.post(f"/api/sessions/{sid}/apply", json={"operations": plan["special_headers"]["operations"], "reanalyze": True}).json()
+    delta = out["delta"]
+    fixed = {d["rule_id"] for d in delta["fixed"]}
+    assert {"PAR-002", "PRJ-002"} <= fixed and delta["previous_version_id"] == "ver-001" and delta["version_id"] == "ver-002"
+    assert delta["previous_counts"]["ERROR"] > delta["counts"]["ERROR"]
+    # re-analyzing the same version again changes nothing
+    again = client.post(f"/api/sessions/{sid}/reanalyze", json={"versionId": "ver-002"}).json()
+    assert again["delta"]["fixed"] == [] and again["delta"]["regressed"] == [] and [v["id"] for v in again["versions"]] == ["ver-001", "ver-002"]
+    # going back to v1 shows the regression honestly
+    back = client.post(f"/api/sessions/{sid}/reanalyze", json={"versionId": "ver-001"}).json()
+    assert {d["rule_id"] for d in back["delta"]["regressed"]} >= {"PAR-002", "PRJ-002"}
+
+
+def test_chat_focus_pulls_the_finding_into_the_turn(client, flagged_model_broken_xlsx, monkeypatch):
+    body = _upload(client, flagged_model_broken_xlsx)
+    sid = body["sessionId"]
+    seen = {}
+
+    def fake_chat(messages, system_prompt, **kwargs):
+        seen["turn"] = messages[-1]["content"]
+        return {"available": True, "text": "explained", "message": None}
+
+    monkeypatch.setattr(chat_context, "chat_completion", fake_chat)
+    res = client.post(f"/api/sessions/{sid}/chat", json={"history": [], "question": "Explain this finding", "focus": {"rule_id": "RES-002", "sheet": "Model", "cell": "J6"}})
+    assert res.status_code == 200 and res.json()["text"] == "explained"
+    assert seen["turn"].startswith("[About finding RES-002 at Model!J6]")
+    assert "## Finding RES-002" in seen["turn"] and "J6 = =MM_RESULT(J5,\"scenario\",1)" in seen["turn"]
+# --- 1.6.2: recalculation errors in the Fix panel -------------------------------------------
+
+
+def test_chat_focus_on_a_recalculation_error_gets_the_recalc_context(client, flagged_model_broken_xlsx, monkeypatch):
+    body = _upload(client, flagged_model_broken_xlsx)
+    sid = body["sessionId"]
+    # plant a recalculation result as the recalc endpoint would (no Excel needed here)
+    server.SESSIONS[sid].recalc = {
+        "status": "ERROR", "message": "Recalculated; 1 genuine formula error cell(s) found.", "version_id": "ver-001",
+        "formula_errors": [{"sheet": "Model", "cell": "L5", "error": "#NAME?", "formula": "=SUM(L4,MM_SETSIZE(3,1))"}],
+        "addin_gap_errors": [{"sheet": "Model", "cell": "J5", "formula": '=MM_LOOP("Scenario", A5:A7)'}],
+    }
+    seen = {}
+
+    def fake_chat(messages, system_prompt, **kwargs):
+        seen["turn"] = messages[-1]["content"]
+        seen["system"] = system_prompt
+        return {"available": True, "text": "explained", "message": None}
+
+    monkeypatch.setattr(chat_context, "chat_completion", fake_chat)
+    res = client.post(f"/api/sessions/{sid}/chat", json={"history": [], "question": "Explain this error", "focus": {"kind": "recalc", "rule_id": "READY-001", "sheet": "Model", "cell": "L5", "error": "#NAME?", "formula": "=SUM(L4,MM_SETSIZE(3,1))"}})
+    assert res.status_code == 200 and res.json()["text"] == "explained"
+    assert seen["turn"].startswith("[About the recalculation error #NAME? at Model!L5; formula: =SUM(L4,MM_SETSIZE(3,1)).")
+    assert "<recalculation>" in seen["system"] and "Model!L5 #NAME?" in seen["system"] and "add-in is not installed" in seen["system"]
+    assert "L5 = =SUM(L4,MM_SETSIZE(3,1))" in seen["turn"]  # the cell itself was retrieved
+
+
+def test_recalculate_endpoint_records_the_version(client, plain_grid_xlsx):
+    body = _upload(client, plain_grid_xlsx)
+    sid = body["sessionId"]
+    rc = client.post(f"/api/sessions/{sid}/recalculate").json()
+    assert rc["version_id"] == "ver-001"
+    assert server.SESSIONS[sid].recalc is rc or server.SESSIONS[sid].recalc == rc
+
+
+def test_chat_focus_on_a_group_asks_for_a_fix_for_every_cell(client, flagged_model_broken_xlsx, monkeypatch):
+    from app.recalc import group_errors
+
+    body = _upload(client, flagged_model_broken_xlsx)
+    sid = body["sessionId"]
+    errors = [{"sheet": "Model", "cell": "L6", "error": "#VALUE!", "formula": "=L5+1"}, {"sheet": "Model", "cell": "L7", "error": "#VALUE!", "formula": "=L6+1"}]
+    server.SESSIONS[sid].recalc = {"status": "ERROR", "message": "2 errors", "version_id": "ver-001", "ran": True, "formula_errors": errors, "addin_gap_errors": [], "groups": group_errors(errors, [])}
+    seen = {}
+
+    def fake_chat(messages, system_prompt, **kwargs):
+        seen["turn"] = messages[-1]["content"]
+        seen["system"] = system_prompt
+        return {"available": True, "text": "one fix", "message": None}
+
+    monkeypatch.setattr(chat_context, "chat_completion", fake_chat)
+    group = server.SESSIONS[sid].recalc["groups"][0]
+    res = client.post(f"/api/sessions/{sid}/chat", json={"history": [], "question": "Propose one fix for all cells", "focus": {"kind": "recalc-group", "rule_id": "READY-001", "error": "#VALUE!", "cause": group["cause"], "cells": group["cells"]}})
+    assert res.status_code == 200
+    assert seen["turn"].startswith("[About 2 recalculation errors sharing one root cause")
+    assert "Model!L6" in seen["turn"] and "Model!L7" in seen["turn"] and "fix EVERY listed cell" in seen["turn"]
+    assert "root causes (errors that can be fixed together)" in seen["system"]
+    # a single-cell focus mentions its siblings
+    res = client.post(f"/api/sessions/{sid}/chat", json={"history": [], "question": "Explain", "focus": {"kind": "recalc", "rule_id": "READY-001", "sheet": "Model", "cell": "L6", "error": "#VALUE!", "formula": "=L5+1"}})
+    assert res.status_code == 200 and "shares its root cause" in seen["turn"] and "Model!L7" in seen["turn"]
+
+
+def test_chat_focus_on_an_array_group_tells_the_model_to_fix_the_whole_array(client, flagged_model_broken_xlsx, monkeypatch):
+    from app.recalc import group_errors
+
+    body = _upload(client, flagged_model_broken_xlsx)
+    sid = body["sessionId"]
+    errors = [{"sheet": "Model", "cell": f"L{r}", "error": "#N/A", "formula": "=A5:A6*2", "array": "L6:L8"} for r in (6, 7, 8)]
+    server.SESSIONS[sid].recalc = {"status": "ERROR", "message": "3 errors", "version_id": "ver-001", "ran": True, "formula_errors": errors, "addin_gap_errors": [], "groups": group_errors(errors, [])}
+    seen = {}
+
+    def fake_chat(messages, system_prompt, **kwargs):
+        seen["turn"] = messages[-1]["content"]
+        return {"available": True, "text": "ok", "message": None}
+
+    monkeypatch.setattr(chat_context, "chat_completion", fake_chat)
+    group = server.SESSIONS[sid].recalc["groups"][0]
+    assert group["arrays"] == ["Model!L6:L8"]
+    res = client.post(f"/api/sessions/{sid}/chat", json={"history": [], "question": "fix", "focus": {"kind": "recalc-group", "rule_id": "READY-001", "error": "#N/A", "cause": group["cause"], "cells": group["cells"]}})
+    assert res.status_code == 200 and "Model!L6:L8 is ONE array formula" in seen["turn"] and "set_array_formula" in seen["turn"] and "[array L6:L8]" in seen["turn"]
+    assert "Facts: the array L6:L8 has 3x1 cells" in seen["turn"] and "set_array_formula on L6:L7 with the same formula and clear_cell L8" in seen["turn"]
+    res = client.post(f"/api/sessions/{sid}/chat", json={"history": [], "question": "fix", "focus": {"kind": "recalc", "rule_id": "READY-001", "sheet": "Model", "cell": "L7", "error": "#N/A", "formula": "=A5:A6*2"}})
+    assert res.status_code == 200 and "part of the array formula Model!L6:L8" in seen["turn"] and "every cell of L6:L8" in seen["turn"]
+
+
+@pytest.mark.skipif(not com_available(), reason="needs Excel")
+def test_recalculate_reports_the_array_a_cell_belongs_to(client, array_formula_xlsx):
+    body = _upload(client, array_formula_xlsx)
+    rc = client.post(f"/api/sessions/{body['sessionId']}/recalculate").json()
+    assert rc["ran"] is True
+    members = [e for e in rc["formula_errors"] if e["cell"] in ("C7", "C8", "C9")]
+    assert len(members) == 3 and all(e["array"] == "C5:C9" for e in members)
+    assert all("array" not in e for e in rc["formula_errors"] if e["cell"] == "E7")
+    g = next(g for g in rc["groups"] if g["count"] == 3)
+    assert g["arrays"] == ["Arr!C5:C9"] and g["cells"][0]["array"] == "C5:C9" and "array formula Arr!C5:C9" in g["cause"]
+    # after a recalculation the workbook view shows the computed values (the errors) and the array's formula
+    win = client.get(f"/api/sessions/{body['sessionId']}/cells", params={"sheet": "Arr", "cell": "C7", "rows": 0, "cols": 0}).json()
+    c7 = win["rows"][0]["cells"][0]
+    assert win["values_from"] == "recalculation" and c7["value"] == "#N/A" and c7["error"] is True and c7["formula"] == "{=A5:A6*2}" and c7["array"] == "C5:C9"
+
+
+def test_cells_window_shows_contents_and_formulas(client, flagged_model_broken_xlsx):
+    body = _upload(client, flagged_model_broken_xlsx)
+    sid = body["sessionId"]
+    win = client.get(f"/api/sessions/{sid}/cells", params={"sheet": "Model", "cell": "L5", "rows": 1, "cols": 1}).json()
+    assert win["sheet"] == "Model" and win["focus"] == "L5" and win["columns"] == ["K", "L", "M"] and [r["row"] for r in win["rows"]] == [4, 5, 6]
+    focus = [c for r in win["rows"] for c in r["cells"] if c["focus"]]
+    assert len(focus) == 1 and focus[0]["ref"] == "L5" and focus[0]["formula"] == "=SUM(L4,MM_SETSIZE(3,1))"
+    title = client.get(f"/api/sessions/{sid}/cells", params={"sheet": "Model", "cell": "A3", "rows": 0, "cols": 0}).json()
+    assert title["rows"][0]["cells"][0]["value"] == "#Assumptions /Reorder /Inpt" and title["rows"][0]["cells"][0]["formula"] is None
+    assert title["values_from"] == "analysis copy"
+    bad = client.get(f"/api/sessions/{sid}/cells", params={"sheet": "Nope", "cell": "A1"}).json()
+    assert "not found" in bad["error"]
+
+
+# --- assistant grid naming (1.6.7) ----------------------------------------------------
+
+
+def test_grid_names_endpoint_proposes_names_and_folds_them_into_the_plan(client, section_heading_grids_xlsx, monkeypatch):
+    """The endpoint asks the assistant only about grids whose deterministic name
+    is meaningless, and the accepted names change what the titles action writes."""
+    body = _upload(client, section_heading_grids_xlsx)
+    session_id = body["sessionId"]
+
+    seen: dict = {}
+
+    def fake_chat(messages, system_prompt, **kw):
+        seen["prompt"] = messages[0]["content"]
+        return {"available": True, "text": '{"CF!B8:C8": "Section Two Heading"}', "message": None}
+
+    monkeypatch.setattr(server, "suggest_names", lambda contexts, **kw: __import__("app.grid_naming", fromlist=["x"]).suggest_names(contexts, completion=fake_chat, **kw))
+
+    res = client.post(f"/api/sessions/{session_id}/grid-names", json={"apply": True})
+    assert res.status_code == 200, res.text
+    out = res.json()
+    assert out["available"] and out["applied"]
+    rows = {r["grid"]: r for r in out["names"]}
+    # the block with a real heading above it is not sent for renaming
+    assert "CF!C3:D5" not in rows
+    # the fallback-named one is, and carries both names for review
+    assert rows["CF!B8:C8"]["deterministic"] == "CF B8"
+    assert rows["CF!B8:C8"]["suggested"] == "Section Two Heading"
+    titles = {o["after"] for a in out["plan"] if a["id"] == "create_grid_titles" for o in a["operations"] if o["op"] == "set_value"}
+    assert "#Section Two Heading" in titles and "#CF B8" not in titles
+    assert "#Demographic Assumptions" in titles  # heading-derived name is untouched
+
+
+def test_grid_names_endpoint_survives_an_unavailable_assistant(client, section_heading_grids_xlsx, monkeypatch):
+    body = _upload(client, section_heading_grids_xlsx)
+    monkeypatch.setattr(server, "suggest_names", lambda contexts, **kw: {"available": False, "names": {}, "message": "no secret.key found nearby"})
+    out = client.post(f"/api/sessions/{body['sessionId']}/grid-names", json={}).json()
+    assert out["available"] is False and out["names"] == [] and out["applied"] is False

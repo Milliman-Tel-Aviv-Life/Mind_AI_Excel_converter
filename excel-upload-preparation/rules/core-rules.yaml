@@ -1,0 +1,35 @@
+version: 1.0.0
+rules:
+  - id: FILE-001
+    version: 1.0.0
+    status: active
+    category: file
+    description: Never modify the source workbook.
+    confidence: HIGH
+    priority: REQUIRED
+    source: {type: user_decision, locator: response-2}
+    validation: {deterministic: true, implementation: validators.file.ensure_source_immutable}
+    correction: {automatic: false}
+    on_unevaluable: ERROR
+  - id: FILE-002
+    version: 1.0.0
+    status: active
+    category: file
+    description: Output must be xlsx or xlsm.
+    confidence: HIGH
+    priority: REQUIRED
+    source: {type: user_decision, locator: response-2}
+    validation: {deterministic: true, implementation: validators.file.allowed_output_format}
+    correction: {automatic: true}
+    on_unevaluable: NOT_SUPPORTED
+  - id: READY-001
+    version: 1.0.0
+    status: active
+    category: recalculation
+    description: Successful recalculation is required before PASS.
+    confidence: HIGH
+    priority: REQUIRED
+    source: {type: user_decision, locator: response-2}
+    validation: {deterministic: true, implementation: validators.recalculation.successful_recalculation}
+    correction: {automatic: false}
+    on_unevaluable: NOT_SUPPORTED

@@ -1,0 +1,89 @@
+version: 1.0.0
+rules:
+- id: RSK-001
+  version: 1.0.0
+  status: active
+  category: risk
+  description: Duplicate Resize Groups
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RSK-001
+  validation:
+    deterministic: false
+    implementation: validators.risk.rsk_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  fail_if: Duplicate dynamic reference groups exist.
+  severity_source: BLOCKER
+- id: RSK-002
+  version: 1.0.0
+  status: active
+  category: risk
+  description: Oversized Array Results
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RSK-002
+  validation:
+    deterministic: false
+    implementation: validators.risk.rsk_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  fail_if: Array calculations exceed grid boundaries.
+  severity_source: BLOCKER
+- id: RSK-003
+  version: 1.0.0
+  status: active
+  category: risk
+  description: Hyperlink Upload Risk -- Review hyperlinks.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RSK-003
+  validation:
+    deterministic: true
+    implementation: validators.risk.hyperlinks
+  correction:
+    automatic: false
+  on_unevaluable: WARNING
+  severity_source: MEDIUM
+- id: RSK-004
+  version: 1.0.0
+  status: active
+  category: risk
+  description: LET Function Review -- Review LET formulas.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RSK-004
+  validation:
+    deterministic: true
+    implementation: validators.risk.let_function_usage
+  correction:
+    automatic: false
+  on_unevaluable: WARNING
+  severity_source: MEDIUM
+- id: RSK-005
+  version: 1.0.0
+  status: active
+  category: risk
+  description: External Named Range Review -- Inventory external named ranges.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: RSK-005
+  validation:
+    deterministic: true
+    implementation: validators.risk.external_named_ranges
+  correction:
+    automatic: false
+  on_unevaluable: WARNING
+  severity_source: MEDIUM

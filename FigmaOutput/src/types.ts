@@ -1,0 +1,232 @@
+export type Status = "PASS" | "WARNING" | "ERROR" | "REQUIRES_USER_INPUT" | "NOT_SUPPORTED";
+export type Evidence = "DOCUMENTED_RULE" | "DETERMINISTIC_FINDING" | "USER_PROVIDED" | "INFERENCE" | "RECOMMENDATION";
+export type Mode = "plan" | "prep_loops" | "fix_formulas" | "structure_fix";
+
+export interface Finding {
+  rule_id: string;
+  status: Status;
+  severity?: "HIGH" | "MEDIUM" | "LOW" | "BLOCKER" | "INFO";
+  confidence: "HIGH" | "MEDIUM" | "LOW";
+  evidence: Evidence;
+  location: { sheet?: string; cell?: string; [k: string]: unknown };
+  observed?: unknown;
+  expected?: unknown;
+  message: string;
+  readiness_impact: Status;
+  correction_available: boolean;
+  source: { document?: string; article?: string };
+}
+
+export interface ValidationReport {
+  schema_version: string;
+  report_id: string;
+  status: Status;
+  findings: Finding[];
+  summary: {
+    finding_count: number;
+    status_counts: Partial<Record<Status, number>>;
+    not_supported_rule_ids: string[];
+    blocking_rule_ids: string[];
+  };
+}
+
+export interface GridFlag { name: string; raw: string; args: string[] }
+
+export interface Grid {
+  sheet: string;
+  title_cell: string | null;
+  title: string | null;
+  name: string | null;
+  display_name: string;
+  flags: GridFlag[];
+  flag_names: string[];
+  anchor: string;
+  ref: string;
+  first_row: number;
+  last_row: number;
+  first_col: number;
+  last_col: number;
+  n_rows: number;
+  n_cols: number;
+  header_values: (string | number | boolean | null)[];
+  header_is_all_text: boolean;
+  inner_title_cells: string[];
+  formula_count: number;
+}
+
+export interface SheetSummary {
+  name: string;
+  state: "visible" | "hidden" | "veryHidden";
+  dimensions: string;
+  grids: Grid[];
+  standalone_text_cells: { cell: string; text: string }[];
+  formula_count: number;
+  array_formula_count: number;
+  protected: boolean;
+}
+
+export interface WorkbookSummary {
+  file_name: string;
+  file_type: "xlsx" | "xlsm";
+  sha256: string;
+  application: string | null;
+  app_version: string | null;
+  has_vba: boolean;
+  sheet_count: number;
+  hidden_sheet_count: number;
+  grid_count: number;
+  flagged_grid_count: number;
+  formula_count: number;
+  array_formula_count: number;
+  defined_name_count: number;
+  external_link_part_count: number;
+  mm_functions_used: Record<string, number>;
+  native_function_usage: Record<string, number>;
+  sheets: SheetSummary[];
+}
+
+export type OpKind =
+  | "set_value"
+  | "set_formula"
+  | "clear_cell"
+  | "set_array_formula"
+  | "rename_sheet"
+  | "insert_row"
+  | "insert_column"
+  | "set_sheet_visibility"
+  | "unprotect_sheet"
+  | "explicit_colors";
+
+export interface Operation {
+  op: OpKind;
+  action_id: string;
+  rule_id: string;
+  sheet: string;
+  cell?: string;
+  row?: number;
+  column?: string;
+  cells?: string[];
+  range?: string;
+  before: unknown;
+  after: unknown;
+  note?: string;
+  after_inserts?: boolean;
+}
+
+export interface PrepAction {
+  id: string;
+  title: string;
+  rule_ids: string[];
+  default_on: boolean;
+  operations: Operation[];
+  count: number;
+  skipped: string[];
+}
+
+export interface ApplyResult {
+  status: "APPLIED" | "PARTIAL" | "ERROR" | "NOT_APPLICABLE";
+  method: "excel_com" | "openpyxl";
+  output_path: string;
+  output_name: string;
+  applied: Operation[];
+  failed: (Operation & { error: string })[];
+  verified_opens_in_excel: boolean | null;
+  warnings: string[];
+  message: string;
+}
+
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  note?: boolean;
+  provenance?: { context_chars: number; detail_chars: number; lookups: number };
+}
+
+export interface Proposal {
+  summary: string | null;
+  operations: Operation[];
+  errors: string[];
+}
+
+export interface ChatReply {
+  text: string;
+  proposal: Proposal | null;
+  provenance: { context_chars: number; detail_chars: number; lookups: number };
+}
+
+export interface RecalcCell { sheet: string; cell: string; formula: string; error: string; array?: string }
+
+/** Recalculation errors that share one root cause (same unknown function, same formula shape, same missing add-in function). */
+export interface RecalcGroup {
+  id: string;
+  error: string;
+  cause: string;
+  kind: "formula" | "addin_gap";
+  signature: string;
+  cells: RecalcCell[];
+  count: number;
+}
+
+export interface RecalcResult {
+  status: Status;
+  message: string;
+  /** Version the recalculation ran on (set by the backend). */
+  version_id?: string;
+  /** false when Excel could not run at all (COM failure / not available) -- then the error lists mean nothing. */
+  ran?: boolean;
+  formula_errors: RecalcCell[];
+  addin_gap_errors: { sheet: string; cell: string; formula: string }[];
+  groups?: RecalcGroup[];
+}
+
+export interface ReportBuild {
+  standalone_name: string;
+  workbook_name: string;
+  method: "excel_com" | "openpyxl";
+  verified_opens_in_excel: boolean | null;
+  warnings: string[];
+}
+
+export interface Version {
+  id: string;
+  label: string;
+  file_name: string;
+  sha256: string;
+  created_at: string;
+  source: "upload" | "prep" | "assistant" | "formula" | "convert";
+  change_log: Operation[];
+  verified_opens_in_excel: boolean | null;
+}
+
+/** What changed between the previous analysis and this one (same session). */
+export interface DeltaEntry { rule_id: string; from: Status; to: Status; note?: string }
+export interface Delta {
+  version_id: string;
+  previous_version_id: string | null;
+  fixed: DeltaEntry[];
+  improved: DeltaEntry[];
+  regressed: DeltaEntry[];
+  previous_counts: Partial<Record<Status, number>>;
+  counts: Partial<Record<Status, number>>;
+}
+
+/** What the Fix panel is opened for: a rule finding, a recalculation error at a cell, or a group of errors with one root cause. */
+export interface WindowCell { ref: string; value: unknown; formula: string | null; array: string | null; error: boolean; focus: boolean }
+export interface CellWindow { sheet: string; focus: string; range?: string; columns: string[]; rows: { row: number; cells: WindowCell[] }[]; values_from?: string; error?: string }
+
+export interface FixTarget {
+  kind?: "finding" | "recalc" | "recalc-group";
+  rule_id: string;
+  sheet?: string;
+  cell?: string;
+  grid?: string;
+  /** recalc only: the error Excel produced (#NAME?, #REF!, ...) and the formula it evaluated */
+  error?: string;
+  formula?: string;
+  /** recalc only: the cell only fails because the MMForExcel add-in is missing here */
+  addin_gap?: boolean;
+  /** recalc-group: every cell sharing the cause; recalc: the other cells sharing this cell's cause */
+  cells?: RecalcCell[];
+  cause?: string;
+  group_id?: string; array?: string;
+}

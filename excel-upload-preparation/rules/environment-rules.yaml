@@ -1,0 +1,56 @@
+version: 1.0.0
+rules:
+- id: MMX-001
+  version: 1.0.0
+  status: active
+  category: environment
+  description: 'Add-In Requirement -- Pass if: MMForExcel is required when MM functions exist.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: MMX-001
+  validation:
+    deterministic: false
+    implementation: validators.environment.mmx_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if: MMForExcel is required when MM functions exist.
+  severity_source: HIGH
+- id: MMX-002
+  version: 1.0.0
+  status: active
+  category: environment
+  description: 'Platform -- Pass if: Workbook is maintained using Windows Excel.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: MMX-002
+  validation:
+    deterministic: false
+    implementation: validators.environment.mmx_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if: Workbook is maintained using Windows Excel.
+  severity_source: HIGH
+- id: MMX-003
+  version: 1.0.0
+  status: active
+  category: environment
+  description: 'Function Classification -- Classify every MM function into: - Resize - Loop - Dimension
+    - Instance - Distribution - Audit - AOC/AOS - Iteration - Export - Input'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: MMX-003
+  validation:
+    deterministic: false
+    implementation: validators.environment.mmx_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM

@@ -1,0 +1,149 @@
+# Rules mined from the Milliman Mind knowledge base (CompleteMindDocn.docx,
+# a scrape of kb.milliman-mind.com) that 01_Mind_Readiness_Standard.md does
+# not cover. Hand-authored from the cited articles (the KB is prose, not a
+# rule table); references/mind-flags.yaml is the machine-mined companion.
+rules:
+- id: FLG-001
+  version: 1.0.0
+  status: active
+  category: kb
+  description: 'Documented Flags -- Pass if: every /Flag token on a grid title or header is documented in the KB with the documented argument shape.'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: CompleteMindDocn.docx
+    article: references/mind-flags.yaml (all flag articles)
+  validation:
+    deterministic: true
+    implementation: validators.kb.flg_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if: Every flag is documented; argument counts match the documented syntax.
+  severity_source: MEDIUM
+- id: GRP-001
+  version: 1.0.0
+  status: active
+  category: kb
+  description: 'Group Flag Syntax -- Validate /Group.(GroupName).x.y: group name, non-negative integer positions, unique positions per group.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: CompleteMindDocn.docx
+    article: advanced-features/create-groups-of-grids
+  validation:
+    deterministic: true
+    implementation: validators.kb.grp_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if: Every /Group flag has a name and two integer positions; no position is used twice within a group.
+  severity_source: HIGH
+- id: BKP-001
+  version: 1.0.0
+  status: active
+  category: kb
+  description: 'Backup Flags -- Each backup name has exactly one /BackupSource and at least one /BackupDest; MM_BACKUPBUTTON is outside backup grids.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: CompleteMindDocn.docx
+    article: advanced-features/grid-backup-feature
+  validation:
+    deterministic: true
+    implementation: validators.kb.bkp_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if: Sources and destinations are paired by name; a button exists outside the backup grids.
+  severity_source: HIGH
+- id: HID-001
+  version: 1.0.0
+  status: active
+  category: kb
+  description: 'HideRows Column -- A /HideRows header column holds TRUE/FALSE (1/0) values or formulas, at the right of the grid.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: CompleteMindDocn.docx
+    article: advanced-features/dynamically-hide-rows-columns-grids
+  validation:
+    deterministic: true
+    implementation: validators.kb.hid_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if: Every /HideRows value is boolean-like or a formula.
+  severity_source: HIGH
+- id: RNG-001
+  version: 1.0.0
+  status: active
+  category: kb
+  description: 'MM_RANGE Placement -- MM_RANGE is used alone (whole formula) in a single-cell table.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: CompleteMindDocn.docx
+    article: resize/mm_range-function
+  validation:
+    deterministic: true
+    implementation: validators.kb.rng_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if: Every MM_RANGE call is the whole formula of a cell that is alone in its grid.
+  severity_source: HIGH
+- id: UNQ-001
+  version: 1.0.0
+  status: active
+  category: kb
+  description: 'Unique Special Grids -- /ProjectSettings, /StepLabels, /InputSettings, /ExportSettings, /AOCOrder, /InstanceKeys, /CalculationSteps, /Translations, /ExtSettings appear at most once.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: CompleteMindDocn.docx
+    article: projectsettings-grid, step-labels-grid, input-manager-automatch, export, aoc, introduction-to-instances, iterations-design, translations-of-model
+  validation:
+    deterministic: true
+    implementation: validators.kb.unq_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if: No unique-kind flag appears on more than one grid.
+  severity_source: BLOCKER
+- id: TRN-001
+  version: 1.0.0
+  status: active
+  category: kb
+  description: 'Translations Headers -- /Translations grid headers are ISO 639-1 two-letter language codes.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: CompleteMindDocn.docx
+    article: basic-model-design/translations-of-model
+  validation:
+    deterministic: true
+    implementation: validators.kb.trn_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if: Every header is a valid ISO 639-1 code and there are at least two columns.
+  severity_source: HIGH
+- id: SIM-001
+  version: 1.0.0
+  status: active
+  category: kb
+  description: 'NbSimulations Grid -- A grid titled #NbSimulations holds exactly one positive integer.'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: CompleteMindDocn.docx
+    article: basic-model-design/general-structure-and-guidelines
+  validation:
+    deterministic: true
+    implementation: validators.kb.sim_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if: The grid body is a single positive integer.
+  severity_source: MEDIUM

@@ -1,0 +1,151 @@
+version: 1.0.0
+rules:
+- id: FORMAT-001
+  version: 1.0.0
+  status: active
+  category: format
+  description: Preserve supported cell types, basic formatting, merged cells, validation, notes, and outlines
+    where possible.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: CompleteMindDocn.docx
+    article: excel-specificities-kept-in-mind
+  validation:
+    deterministic: true
+    implementation: validators.format.compare_semantic_features
+  correction:
+    automatic: false
+  on_unevaluable: WARNING
+- id: FMT-001
+  version: 1.0.0
+  status: active
+  category: format
+  description: 'Supported Formats -- Allowed: - Standard - Number - Text - Boolean - Date - Data Validation
+    - Hyperlink'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: FMT-001
+  validation:
+    deterministic: false
+    implementation: validators.format.fmt_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: FMT-002
+  version: 1.0.0
+  status: active
+  category: format
+  description: 'Excel Styles -- Pass if: Workbook does not rely on unsupported theme formatting.'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: FMT-002
+  validation:
+    deterministic: false
+    implementation: validators.format.fmt_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - Workbook does not rely on unsupported theme formatting.
+  severity_source: MEDIUM
+- id: FMT-003
+  version: 1.0.0
+  status: active
+  category: format
+  description: 'Empty Styled Cells -- Pass if: Empty styled cells are reviewed.'
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: FMT-003
+  validation:
+    deterministic: false
+    implementation: validators.format.fmt_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - Empty styled cells are reviewed.
+  severity_source: LOW
+- id: FMT-004
+  version: 1.0.0
+  status: active
+  category: format
+  description: 'Merged Cells -- Pass if: Merged cells are intentional.'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: FMT-004
+  validation:
+    deterministic: true
+    implementation: validators.format.merged_cells
+  correction:
+    automatic: false
+  on_unevaluable: WARNING
+  pass_if:
+  - Merged cells are intentional.
+  severity_source: MEDIUM
+- id: FMT-005
+  version: 1.0.0
+  status: active
+  category: format
+  description: 'Locked Cells -- Pass if: Locked cells are intentional.'
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: FMT-005
+  validation:
+    deterministic: true
+    implementation: validators.format.locked_cells
+  correction:
+    automatic: false
+  on_unevaluable: WARNING
+  pass_if:
+  - Locked cells are intentional.
+  severity_source: INFO
+- id: FMT-006
+  version: 1.0.0
+  status: active
+  category: format
+  description: 'Grouped Rows/Columns -- Pass if: Outline structure is intentional.'
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: FMT-006
+  validation:
+    deterministic: false
+    implementation: validators.format.fmt_006
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - Outline structure is intentional.
+  severity_source: LOW
+- id: FMT-007
+  version: 1.0.0
+  status: active
+  category: format
+  description: 'Comments -- Pass if: User expects comments to be kept.'
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: FMT-007
+  validation:
+    deterministic: true
+    implementation: validators.format.comments
+  correction:
+    automatic: false
+  on_unevaluable: WARNING
+  pass_if:
+  - User expects comments to be kept.
+  severity_source: INFO

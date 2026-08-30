@@ -1,0 +1,155 @@
+version: 1.0.0
+rules:
+- id: INS-001
+  version: 1.0.0
+  status: draft
+  category: multi_workbook
+  description: 'InstanceKeys -- Inventory: /InstanceKeys'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: INS-001
+  validation:
+    deterministic: false
+    implementation: validators.multi_workbook.ins_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: INS-002
+  version: 1.0.0
+  status: draft
+  category: multi_workbook
+  description: Main Workbook -- Validate location of InstanceKeys grid.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: INS-002
+  validation:
+    deterministic: false
+    implementation: validators.multi_workbook.ins_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: INS-003
+  version: 1.0.0
+  status: draft
+  category: multi_workbook
+  description: 'Instance Functions -- Inventory: MM_INSTANCE MM_INSTINDEX MM_ISINSTANCELOADED'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: INS-003
+  validation:
+    deterministic: false
+    implementation: validators.multi_workbook.ins_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: INS-004
+  version: 1.0.0
+  status: draft
+  category: multi_workbook
+  description: Partial Load Behaviour -- Review partial load logic.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: INS-004
+  validation:
+    deterministic: false
+    implementation: validators.multi_workbook.ins_004
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: LNK-001
+  version: 1.0.0
+  status: draft
+  category: multi_workbook
+  description: 'Inventory -- Inventory: /InputLink /OutputLink'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LNK-001
+  validation:
+    deterministic: false
+    implementation: validators.multi_workbook.lnk_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: LNK-002
+  version: 1.0.0
+  status: draft
+  category: multi_workbook
+  description: Exact Naming Match -- Validate source and target names.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LNK-002
+  validation:
+    deterministic: false
+    implementation: validators.multi_workbook.lnk_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: LNK-003
+  version: 1.0.0
+  status: draft
+  category: multi_workbook
+  description: Column Count Match -- Validate source/target dimensions.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LNK-003
+  validation:
+    deterministic: false
+    implementation: validators.multi_workbook.lnk_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: LNK-004
+  version: 1.0.0
+  status: draft
+  category: multi_workbook
+  description: Saved Result Requirement -- Validate source projects have results.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LNK-004
+  validation:
+    deterministic: false
+    implementation: validators.multi_workbook.lnk_004
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: LNK-005
+  version: 1.0.0
+  status: draft
+  category: multi_workbook
+  description: Loop Flattening -- Review loop retrieval and flattening.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: LNK-005
+  validation:
+    deterministic: false
+    implementation: validators.multi_workbook.lnk_005
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM

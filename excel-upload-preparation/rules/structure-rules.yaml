@@ -1,0 +1,212 @@
+version: 1.0.0
+rules:
+- id: GRID-001
+  version: 1.0.0
+  status: active
+  category: structure
+  description: Inventory workbook structure as workbooks, sheets, and grids.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: CompleteMindDocn.docx
+    article: general-structure-guidelines
+  validation:
+    deterministic: true
+    implementation: validators.structure.inventory_hierarchy
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+- id: GRID-004
+  version: 1.0.0
+  status: active
+  category: structure
+  description: A StepLabels grid is alone on a separate sheet.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: CompleteMindDocn.docx
+    article: step-labels-grid
+  validation:
+    deterministic: true
+    implementation: validators.structure.step_labels_isolated
+  correction:
+    automatic: conditional
+    approval_required: conditional
+  on_unevaluable: REQUIRES_USER_INPUT
+- id: STR-001
+  version: 1.0.0
+  status: active
+  category: structure
+  description: Grid Detection
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: STR-001
+  validation:
+    deterministic: true
+    implementation: validators.structure.grid_detection_heuristic
+  correction:
+    automatic: false
+  on_unevaluable: REQUIRES_USER_INPUT
+  pass_if:
+  - Intended grids are separated appropriately.
+  - Grid boundaries are clear.
+  - Empty rows and columns exist where grids must be separated.
+  fail_if:
+  - Multiple logical grids are merged unintentionally.
+  severity_source: BLOCKER
+- id: STR-002
+  version: 1.0.0
+  status: active
+  category: structure
+  description: Standalone Text Cells
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: STR-002
+  validation:
+    deterministic: false
+    implementation: validators.structure.str_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - Standalone labels are intentional.
+  fail_if:
+  - User expects standalone text cells to generate navigation items.
+  severity_source: MEDIUM
+- id: STR-003
+  version: 1.0.0
+  status: active
+  category: structure
+  description: Header Recognition
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: STR-003
+  validation:
+    deterministic: false
+    implementation: validators.structure.str_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - First row contains only text values when headers are intended.
+  fail_if:
+  - Header row contains formulas or numeric values that prevent recognition.
+  severity_source: HIGH
+- id: STR-004
+  version: 1.0.0
+  status: active
+  category: structure
+  description: Grid Naming
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: STR-004
+  validation:
+    deterministic: true
+    implementation: validators.structure.grid_naming_heuristic
+  correction:
+    automatic: false
+  on_unevaluable: WARNING
+  pass_if:
+  - Every important grid is explicitly named.
+  fail_if:
+  - Grid is given automatic "Untitled" name.
+  severity_source: MEDIUM
+- id: STR-005
+  version: 1.0.0
+  status: active
+  category: structure
+  description: 'Sheet Names -- Pass if: Sheet names are meaningful.'
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: STR-005
+  validation:
+    deterministic: false
+    implementation: validators.structure.str_005
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - Sheet names are meaningful.
+  severity_source: LOW
+- id: STR-006
+  version: 1.0.0
+  status: active
+  category: structure
+  description: 'Workbook Names -- Pass if: Workbook names are meaningful.'
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: STR-006
+  validation:
+    deterministic: false
+    implementation: validators.structure.str_006
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - Workbook names are meaningful.
+  severity_source: LOW
+- id: STR-007
+  version: 1.0.0
+  status: active
+  category: structure
+  description: 'Hidden Sheets -- Pass if: Hidden sheets use &&Hide intentionally.'
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: STR-007
+  validation:
+    deterministic: true
+    implementation: validators.structure.hidden_sheets
+  correction:
+    automatic: false
+  on_unevaluable: WARNING
+  pass_if:
+  - Hidden sheets use &&Hide intentionally.
+  severity_source: INFO
+- id: REF-001
+  version: 1.0.0
+  status: active
+  category: structure
+  description: Broken Defined-Name References -- a formula referencing a #REF! defined name cannot convert in Mind.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-08-30)
+    article: REF-001
+  validation:
+    deterministic: true
+    implementation: validators.structure.broken_defined_name_refs
+  correction:
+    automatic: conditional
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: REP-001
+  version: 1.0.0
+  status: active
+  category: structure
+  description: Value Reconciliation -- a total (=SUM/addition) whose value does not equal the sum of its addends.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: user requirement (number consistency / value reconciliation)
+    article: REP-001
+  validation:
+    deterministic: true
+    implementation: validators.structure.totals_reconcile
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM

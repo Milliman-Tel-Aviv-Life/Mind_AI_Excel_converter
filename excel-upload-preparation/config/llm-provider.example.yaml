@@ -1,0 +1,6 @@
+provider: milliman-api-manager
+endpoint: ${LLM_API_ENDPOINT}
+api_key: ${LLM_API_KEY}
+model: ${LLM_MODEL}
+structured_output_required: true
+# Never commit real secrets.

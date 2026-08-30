@@ -1,0 +1,819 @@
+# Changelog
+
+## 1.6.8
+
+### The app runs itself against real Milliman Mind
+
+`app/mind_loop.py` (new) + `scripts/run_in_mind.py` + `POST/GET
+/api/sessions/{id}/mind-loop` + the **Mind** screen. One call takes a raw model
+and, unattended, repeats *prepare a fresh copy → local gates → upload →
+convert → add template → run → read what Mind shows → decide* until every gate
+passes or it can say exactly why not. No person and no assistant is consulted
+while it runs (the assistant names grids once, before the first iteration, when
+reachable). Runbook: `docs/RUN_IN_MIND_LOOP.md` (CLI, app, reading the report,
+every `stuck` reason, the numbers gate, cleanup); short form in
+`docs/RUN_IN_MIND.md`, Part D.
+
+- **Gates** (all must pass; a gate that cannot be checked is a failure, never a
+  pass): prepared · numbers · structure · names · convert · run (Mind: *consistent
+  with the audit trail*) · counts (Mind's `Untitled(r,c)` count == the app's
+  predicted untitled count).
+- **Numbers gate** (`numbers_gate` / `compare_values`): fresh copies of source and
+  prepared workbook are fully recalculated by Excel and compared cell for cell,
+  mapping coordinates back through the plan's row inserts (`row_map`, keyed by the
+  plan's source sheet names so `&&Hide` renames still resolve). Cells the plan
+  wrote as content (titles, moved labels) are skipped; cells whose *formula* the
+  plan rewrote (`fix_broken_refs`) are compared under the conservative rule --
+  unchanged, or error → error, never a valid value into anything else. Volatile
+  cells (`NOW()`, `TODAY()`, `RAND*`) and their transitive dependents are skipped;
+  chart sheets are ignored.
+- **One change per retry, always from the original source**: enable the opt-in
+  fix Mind's Convert log asks for (`MIND_ERROR_TO_ACTION`); disable the action to
+  blame for a moved number (`actions_touching` walks the changed cell's
+  precedents -- references and defined names -- back to a cell an action wrote,
+  so a formula rewrite outranks a row insert on the same sheet); disable the
+  insert-heaviest action when the grid count balloons. Default-on actions are
+  as disableable as opt-ins (`active_actions`). No rule → `stuck` with the reason.
+- **Mind operations** folded into `app/mind_client.py` from the proven scratch
+  flows: `open_manager`, `ensure_folder`, `create_blank_project`, `open_project`,
+  `upload_and_convert` (wizard statuses + error log), `add_template`, `run_model`,
+  `template_names` / `untitled_entries` (the `<stem> ▾` selector, decoded to
+  cells), `export_summary`, `delete_project` (sandbox names only; the tile's own
+  menu via DOM ancestry, and the confirmation modal must name the exact project
+  or the delete is refused). `.xlsb` sources are converted through Excel first.
+- **A title may never change a value** (`prep.reference_index`, `referenced_by`,
+  `whole_reference_to`). The first unattended run's numbers gate caught the
+  titling action changing **790 cells** of the real Shlomo model: a title written
+  into column A of the policy table was counted by `=COUNTA(CoverageDetails!A:A)`
+  and the model picked a *different policy*; titles inside `Parameters!C36:C119`
+  were returned by `INDEX` lookups; the company name in `Information!A1` was
+  "moved" into a title while five sheets read `=Information!A1`. Every write
+  site of `create_grid_titles` / `separate_merged_grids` now asks what the
+  workbook's formulas and defined names read: no title into a cell any formula
+  reads, no row insert on a sheet a formula counts or indexes over whole columns,
+  no caption rewritten when something reads it, and a label that is read stays
+  in place (its text still names the grid). Each refusal is listed with the
+  reading formula. On Shlomo: 109 safe titles remain, 41 refused.
+  **Last night's converted model carried this corruption unnoticed -- Mind's
+  "consistent with the audit trail" only checks Mind against the workbook's own
+  cached values.**
+- **Counts gate is reported, not enforced**: Mind's `Untitled(r,c)` entries are
+  matched cell by cell against the app's untitled anchors (`untitled_counts`);
+  Mind reads some blocks differently from the app (on Shlomo, 17 grids Mind
+  starts one column later than the app does, e.g. `D13` vs `C13`). That is a
+  detection gap no prep action can change, so it is written to
+  `detection_gaps` in the report instead of blocking convergence.
+- Adversarial review before the first unattended run found and fixed 11
+  defects, four of which would have produced a false *converged*: rewritten
+  cells never compared, a numbers gate that could not run counted as passed, a
+  Mind failure after Convert falling through, default-on actions never
+  disableable. Regression tests in `tests/unit/test_mind_loop_review.py`.
+
+**Reference run (2026-08-30, raw Shlomo model, unattended):** run 1 stopped
+itself twice -- numbers gate (790 changed cells, titling disabled), then the
+counts mismatch -- and led to the two changes above; run 2 **converged in one
+iteration**: 136 operations applied, 63,174 cells compared / 0 differ, grids
+181 → 155, untitled 181 → 75 (55 refused with the reading formula named),
+Upload/Convert/Test complete, model run consistent with the audit trail, Mind
+listing 51 `Untitled` (8 Mind-only, 32 app-only detection gaps). Output and
+report under `runs/shlomo_20260830_converged/`.
+
+124 unit tests (the offline loop test preps through Excel, recalculates both
+copies and converges on the local gates alone).
+
+## 1.6.7
+
+### Grid naming: error values are not titles, headings become names, and the assistant can name the rest
+
+Driven by a grid-by-grid audit of the real Shlomo model in Milliman Mind, where
+the template list showed `Untitled(60,8)` blocks beside meaningless names like
+`Cashflows C4` and `I`.
+
+- **`#N/A` is no longer read as a grid title** (`grids.looks_like_title`, new
+  `ERROR_LITERALS`). Excel stores error *values* as text starting with '#', so
+  five `#N/A` cells inside `CoverageDetails!A6:CF416` (a 411x84 policy data
+  table) were reported as titles "trapped" in the grid (STR-001) -- and the
+  default-on `separate_merged_grids` action offered to insert whole rows
+  straight through that table to free them. Applying the old plan shattered the
+  workbook from 156 grids to 258 in one pass (and to 648 over three). With the
+  fix the same plan moves it 156 -> 160. **This was a data-structure-destroying
+  default; anyone who ran prep on a model containing error values should
+  re-check the result.**
+- **Section headings above a block are now used as its name**
+  (`prep._section_header_name`). Real models write a section number beside a
+  section title on the row directly above the block it heads, so the cell above
+  is neither blank nor a loose label and every earlier heuristic missed it. The
+  Shlomo model now names blocks "Demographic Assumptions", "Expense Cashflow
+  Calculation", "All Cashflows - Direct" ... instead of "Cashflows C4".
+- **A grid whose cell above is occupied is no longer skipped**: the title
+  action inserts a row (only when no other grid spans it) and writes the title
+  there, the way it already did for a grid starting on row 1. Unnamed grids in
+  the Shlomo model drop 60 -> 39 in a single pass with no fragmentation.
+  Post-insert coordinates are resolved centrally in `prep._ordered`
+  (`_resolve_insert_at`), so a title still lands correctly when other actions
+  in the same approved set insert rows above it.
+- **Context-aware names from the APIM assistant** (`app/grid_naming.py`, new):
+  `build_grid_context` collects the cells above, left and inside a grid (with
+  formulas shown as `formula => computed value`), and `suggest_names` asks for
+  short names in one batched call per 25 grids. `POST /api/sessions/{id}/grid-names`
+  returns deterministic-vs-suggested for review and folds the accepted names
+  into the prep plan. Names are advisory and never bypass review: they only
+  change *which* name `create_grid_titles` proposes, never where it writes or
+  whether the edit is safe, and they are used only where the deterministic name
+  is weak (`prep.is_weak_name`). With the gateway unavailable the deterministic
+  name stands.
+
+- **Runbook + CLI**: `docs/RUN_IN_MIND_NAMING.md` records how to reproduce this
+  audit by hand, and `scripts/audit_grid_names.py` is the whole read-only audit in
+  one command (`--context` dumps the cells around each unnamed grid, `--suggest`
+  adds the assistant's names).
+
+Rule set unchanged: 105 rules, 96 active. 98 unit tests.
+
+## 1.6.6
+
+### Broken-#REF! handling, FILTER supported, value reconciliation (from the real-Mind Shlomo loop)
+
+Found by an autonomous loop that uploaded a real model (Shlomo_IFRS) to live
+Milliman Mind, read what failed, and fixed the app until Mind converts it.
+
+- **REF-001** (`validators.structure.broken_defined_name_refs`): flags cells that
+  reference a broken (#REF!) defined name OR contain a literal #REF! -- Mind's
+  converter cannot compile these ("not a function" / "Formula compilation error").
+  A new **opt-in** prep action ("Replace broken (#REF!) references with NA()")
+  rewrites every standalone broken reference to `NA()`: an error stays an error, so
+  no valid result changes (IFERROR fallbacks and live branches keep their value);
+  array formulas are handled; a range-endpoint #REF! is left for review.
+- **FILTER is Mind-supported** (`validators.formula.MIND_CONFIRMED_SUPPORTED`): the
+  KB "Supported Excel formulas" scrape omits FILTER but real Mind conversion accepts
+  it, so FRM-002 no longer flags it. Extensible as more functions are confirmed.
+- **REP-001** (`validators.structure.totals_reconcile`): value reconciliation --
+  flags any total (`=SUM(range)` or `=a+b+c`) whose value does not equal the sum of
+  its addends. Report-only (never changes numbers).
+
+Rule set: 105 rules, 96 active (REF-001 + REP-001 added). 87 unit tests. Confirmed
+end-to-end: the app's fixes make the raw Shlomo model convert cleanly in real Mind.
+
+## 1.6.5
+
+### Aligned with Mind's converter: reject /ProjectSettings setting names Mind doesn't recognise
+
+Driven by the real-Mind closed loop: uploading a workbook to Milliman Mind and
+reading its verdict showed that declaring an `EnableCheckFormatInputManager` or
+`EnableDebugMode` setting in a `/ProjectSettings` grid makes Mind's **Convert**
+step fail ("The <name> setting does not exist") -- yet the app was *recommending*
+the former (INP-006) and *crediting* the latter (PRJ-005). A minimal workbook
+without them converts cleanly.
+
+- **New rule PRJ-006** (`validators.project.prj_006`): flags any `/ProjectSettings`
+  setting name Mind's converter rejects (`MIND_INVALID_SETTINGS`, seeded with the
+  two confirmed names) as ERROR -- "uploading this workbook fails the Convert step".
+- **INP-006** no longer tells users to add an `EnableCheckFormatInputManager`
+  setting; it explains that format checking is toggled per grid in Mind's Input
+  Manager at import time (not a workbook setting) and points to PRJ-006.
+- **PRJ-005** no longer credits a Mind-invalid name as a configured debug setting.
+- Fixtures: the well-formed fixture drops the two invalid settings; the broken
+  fixture declares one so PRJ-006 is exercised.
+
+Rule set: 103 rules, **94 active** (PRJ-006 added; FORMULA-001 was removed in 1.6.4).
+Also confirmed against real Mind: the upload accepts **XLSX/XLSM only** (not .xlsb).
+
+## 1.6.4
+
+### Hidden readiness sheets, a workbook view for every error, FORMULA-001 gone, Download in the sidebar
+
+- **Readiness sheets are hidden.** `Mind_Readiness_Report` and
+  `..._Summary` in the "with report" copy are written as hidden sheets (both
+  the Excel and the openpyxl writer; a visible sheet stays active), so the
+  copy can be uploaded to Mind without the report being read as data.
+- **What is going on in the workbook.** Every Fix panel (finding sites,
+  recalculation errors, root-cause groups) shows an *In the workbook* grid
+  around the cell -- the cells' contents as Excel last stored them, with
+  the error cell highlighted -- and a **Show formulas** toggle that swaps
+  in the formulas (`{...}` marks an array formula; members show the
+  anchor's formula). Click a cell in the list to move the view. Backend:
+  `GET /api/sessions/{id}/cells?sheet=&cell=&rows=&cols=`
+  (`inventory.cell_window`); values come from the last recalculation of the
+  current version when there is one, else from the analysis copy.
+- **FORMULA-001 removed** ("a target version is configured but no
+  per-version compatibility matrix is implemented"): it could never be
+  anything but NOT_SUPPORTED and only ever blocked the overall status.
+  Rule set: 102 rules, 93 active (function support is still checked by
+  FRM-002 against the KB list).
+- **Download area** in the sidebar: the latest version (label, verified
+  mark, file name) with a one-click download; a compact icon when the
+  sidebar is collapsed.
+
+Tests: 84 (was 83): the cells endpoint (contents, formulas, array members
+after a recalculation) and hidden-sheet assertions on both report writers.
+
+## 1.6.3
+
+### Every error can be fixed; errors with one root cause are fixed together
+
+- Recalculation errors are **grouped by root cause** (`app/recalc.py::
+  group_errors`): `#NAME?` from the same unknown function(s); any error from
+  formulas of the same *shape* (`formula_signature`: references -> REF,
+  numbers -> N, strings masked); add-in-gap `#NAME?` by the MM_ function(s)
+  involved. The recalculation result carries `groups` (biggest first).
+- Recalculate screen: a "Shared root causes -- fix all at once" section
+  with one **Fix all N** button per group; every formula-error row has a
+  **Fix** button plus a "shared xN" badge that opens the group; every
+  add-in-gap line has **Ask / Fix**. Nothing is left without a fix option.
+- Fix panel: a **group mode** (all cells listed, "Propose one fix for all N
+  cells", quick fixes = planned changes touching any of the cells, apply,
+  then "Recalculate now" reporting how many of the N still fail); the
+  single-error mode shows "Same root cause in K other cells -- Fix all N"
+  and switches to the group; a **Propose a fix** button is always present
+  (findings with several sites ask for one fix covering all sites; add-in
+  gaps ask the assistant to confirm none is needed).
+- Assistant: a group focus tells the model the cells share one cause and
+  asks for operations that fix EVERY listed cell (one per cell, or a range
+  when the same formula applies) and to say so; a single-error focus lists
+  its siblings so the answer says they can all be fixed together; the
+  `<recalculation>` context now starts with the root causes.
+
+- **Array formulas are changed as a unit.** Excel refuses to change part of
+  a Ctrl+Shift+Enter array, and the old executor silently rewrote the *whole*
+  array whenever any of its cells got `set_formula`. Now: recalculation
+  errors carry `array` (e.g. `C7:C9`) and the group cause names it; when the
+  operations cover every cell of the array it is dismantled first and each
+  cell gets exactly the proposed content; a fix that covers only part of it
+  fails with a clear message (nothing half-applied) unless it addresses the
+  top-left cell alone, which replaces the whole array formula and is
+  recorded as such; a new assistant operation `set_array_formula`
+  `{sheet, range, formula}` writes one array over a range. The assistant is
+  told which cells form an array (including the members that are not in
+  error) and to fix the whole of it; `validate_proposal` refuses any
+  operation that covers only part of a known array, naming the uncovered
+  cells, and a rejected proposal is sent back to the model once with the
+  validation errors so it can repair it (`proposal_retries`). Validation
+  also refuses **no-op operations** (a value/formula the cell already has,
+  the same array formula re-entered, clearing an empty cell) so a "fix"
+  that changes nothing is bounced back to the model instead of being
+  applied and reported as a change. For an array formula the model also gets
+  the decisive fact -- the array's size versus the ranges it references --
+  with the concrete fix when it overflows its source (`array_size_hint`:
+  "set_array_formula on C5:C6 with the same formula and clear_cell C7:C9"),
+  both in the focus prefix and in the rejection; up to two repair rounds.
+- Fix panel and assistant note now report **failed operations** ("1 change
+  could not be applied: Arr!C9 — …") instead of only counting successes;
+  COM errors show Excel's own message.
+
+Tests: 83 (was 76): grouping (signature normalisation, unknown-function,
+add-in and shape groups, ordering), the group / sibling / array chat focus,
+partial-array proposal refusal, the proposal retry, and the Excel-backed
+array-unit executor test.
+
+## 1.6.2
+
+### Ask / Fix on recalculation errors
+
+- Recalculate screen: every genuine formula error row has an **Ask / Fix**
+  button (the error value itself is clickable too) and every add-in-gap
+  `#NAME?` line has **Ask**; both open the same Fix panel used by Findings,
+  now with a *recalculation* mode: the error and the formula Excel
+  evaluated, what the error means, quick fixes = planned changes that
+  target that exact cell, and the mini chat focused on the error
+  ("Explain this error", "Propose a fix", "Which cells does this formula
+  depend on?"). After applying a change the panel offers **Recalculate
+  now** and reports whether the cell still fails; the Recalculate screen
+  keeps the latest result (store-backed) and flags it as stale when the
+  workbook version moved on.
+- Backend: the session remembers the last recalculation
+  (`recalc.version_id` tells which version it ran on); `POST .../chat`
+  accepts a recalc `focus {kind: "recalc", sheet, cell, error, formula,
+  addin_gap}` and always appends the last recalculation (status, genuine
+  error cells with formulas, add-in-gap cells) to the assistant's context
+  (`app/chat_context.py::recalculation_context`). The system prompt tells
+  the assistant to fix genuine errors from the cell's formula and never to
+  "fix" an add-in-gap `#NAME?` by rewriting an MM_ formula.
+- **Fixed**: a recalculation run after an Excel apply in the same process
+  failed with "The interface is unknown" (RPC_S_UNKNOWN_IF) -- the exact
+  sequence the Fix panel performs (apply, then "Recalculate now").
+  `app/recalc.py` had its own COM lifecycle that released Range/Worksheet
+  proxies *after* `CoUninitialize`, poisoning the apartment for the next
+  session. It is now built on `app/excel_com.py::excel_session` with every
+  proxy scoped inside an inner function (`_scan`), like every other Excel
+  path in the app; the stray "Windows fatal exception 0x80010108" noise is
+  gone too.
+- Recalculation results carry `ran`: false when Excel could not run at all
+  (COM failure / pywin32 missing), so an errored run is never mistaken for
+  "no errors" -- the Recalculate screen shows it as a failure and the Fix
+  panel's "Recalculate now" reports "could not run" instead of "fixed".
+
+Tests: 76 (was 73): recalc-focused chat gets the error prefix, the cell
+contents and the `<recalculation>` context; the recalculate endpoint
+records the version; regression for recalculate -> Excel apply ->
+recalculate in one process (skipped without Excel).
+
+## 1.6.1
+
+### Fixed: a fix did not show up after re-analysis (web app)
+
+The engine was right (re-analysing v2 after an apply dropped the fixed
+rules); the web front-end lost the information on the way:
+- the Prep apply did not re-analyse, so Findings kept showing the previous
+  version until a manual re-analysis;
+- a rule that became PASS simply *disappeared* from the table (PASS is
+  filtered out by default), so a fixed blocker looked "not fixed";
+- a partially fixed rule (e.g. FRM-002 with several call sites) stayed ERROR
+  with no sign of progress.
+
+Now every apply (Prep, Assistant, Fix panel) re-analyses the new version
+in the same request, and the backend returns a **delta** against the
+previous analysis (`fixed` / `improved` / `regressed` rule ids and the
+status counts side by side). The Findings screen shows a "Since the
+previous analysis" banner, keeps fixed rules visible with a FIXED badge
+("show fixed rows"), and the Prep result card says what changed.
+Re-analyse always targets the current (latest) version and refreshes the
+version list. `correction_available` on each finding now means "the
+current prep plan has an operation for it" (it used to reflect a YAML flag
+that is true for only three rules). FRM-002 reports up to 25 call sites
+per function instead of one.
+
+### Fix panel -- click a finding, fix it there
+
+- Clicking a status pill or the **Fix / Ask** button on any non-PASS row
+  of the Findings table, or a grid card in the **Workbook Map**, opens a
+  side panel for that finding: rule, status, location, message, every
+  `Sheet!Cell` site from the finding's observed data, **quick fixes** (the
+  prep-plan actions that cover the rule, applied with one click) and a
+  **mini chat** focused on the finding ("Explain this finding", "Propose a
+  fix", or free text). Proposals from the mini chat are applied right
+  there; after any apply the panel re-reads the new analysis and shows
+  "<rule> is now PASS" (FIXED badge) or the remaining status.
+- Backend: `POST .../chat` accepts `focus {rule_id, sheet, cell}`, which is
+  prefixed to the question so the retrieval pulls that finding's observed
+  data and the cell contents into the turn.
+- Workbook Map cards now show only the findings located *inside* that grid
+  (or on its title cell) -- previously every card on a sheet showed the
+  sheet's worst finding -- plus their rule ids; sheet-level findings appear
+  as chips above the cards.
+- Workbook screen: "Load another workbook" starts a new session.
+
+Verified in a real browser: Fix on PAR-002 -> quick fix -> panel says
+"PAR-002 is now PASS" with FIXED badge, banner "fixed 2 -- PAR-002,
+PRJ-002", fixed row visible; grid card click opens the panel; mini chat on
+TRN-001 explains the finding via the live gateway, proposes the header fix
+and applies it -> "TRN-001 is now PASS".
+
+Tests: 73 (was 71): delta + fixability after apply/re-analyse (incl.
+honest regression when going back to v1) and finding-focused chat.
+
+## 1.6.0
+
+The Figma-built "Mind Ready" front-end (`Mind Copilot Skill/FigmaOutput`,
+React 19 + Vite + Tailwind, generated from docs/FIGMA_UI_PROMPT.md) is now
+wired to the engine through a FastAPI backend. The Streamlit UI is unchanged
+and still works.
+
+### Backend -- `app/web/server.py`
+
+- One endpoint per function of the front-end's `src/services/api.ts`:
+  `POST /api/sessions` (upload + mode, `.xlsb` converted through Excel
+  first), `POST /api/sessions/{id}/reanalyze`, `.../apply` (operations ->
+  new verified version, optional re-analysis in the same call),
+  `.../suggest`, `.../chat`, `.../recalculate`, `.../reports`,
+  `GET .../versions`, `GET .../files/{name}`, `GET /api/health`.
+- Per-session **version lineage**: v1 original upload (v2 converted for
+  `.xlsb`), then one version per apply -- prep, assistant or formula fix --
+  each a separate file written by Excel, verified to open, with its change
+  log; download names are unique within the session.
+- The engine's dicts are mapped onto the TypeScript contracts
+  (`WorkbookSummary` built from the inventory: sheets, grids with titles/
+  flags/headers/inner titles, standalone text, protection; `ValidationReport`
+  and `PrepAction` pass through; `ApplyResult`, `ChatReply` with validated
+  proposals, `RecalcResult`, `ReportBuild`, `Version`).
+- Serves the built front-end (`FigmaOutput/dist`, or `MIND_READY_DIST`)
+  with an SPA fallback, so `run_mind_ready_web.bat` -> http://localhost:8600
+  is the whole app. `requirements.txt`: fastapi, uvicorn, python-multipart.
+
+### Front-end wiring (`FigmaOutput/src`)
+
+- `services/api.ts` talks to `/api` (mocks remain behind
+  `VITE_USE_MOCKS=true`); `vite.config.ts` proxies `/api` to :8600 in dev.
+- Fixes to what only worked with mocks: the upload screen now selects a real
+  file and runs on "Run analysis" (it used to post an empty fake file);
+  download links use the real session id; "Re-analyze" (top bar and prep
+  result card) refreshes summary, report and plan; the prep selection resets
+  when a new plan arrives; applying an assistant proposal updates the store
+  from the backend's re-analysis and offers the changed file; errors surface
+  inline instead of failing silently.
+
+Verified in a real browser against the running server: upload -> findings
+(table + workbook map) -> prep apply (Excel, verified) -> download ->
+re-analyze -> history lineage -> assistant change via the live gateway
+(rename sheet) -> re-analyzed -> reports generated and downloaded.
+
+Tests: 71 (was 65) -- `tests/unit/test_web_api.py` covers health, upload
+contracts, mode filtering and input validation, apply + version lineage +
+download + re-apply, chat with a validated proposal, reports and
+recalculation.
+
+## 1.5.1
+
+- **Fixed**: applying changes a second time (to the file the previous apply
+  produced) crashed with `shutil.copy2` -> `CopyFile2` -- the copy helper
+  targeted `work_dir/<name>`, which *was* the source. `make_immutable_copy`
+  now never copies a file onto itself or over a previous output: when the
+  target exists it uses a versioned sub-folder (`v2/`, `v3/`, ...). Every
+  earlier output stays intact. Regression test added.
+- UI restyled, behaviour unchanged: the upload / mode / run workflow moved
+  to a sidebar with a "current file" card (name, status pill, sheet/grid/
+  formula counts) and environment notes; status pills and KPI tiles replace
+  emoji; sections are a segmented control (still session-keyed, so a long
+  Excel apply no longer hides its own result); prep actions, apply results,
+  proposals and report downloads sit in bordered cards; the findings table
+  has fixed column widths.
+
+## 1.5.0
+
+The assistant can now change the workbook on request, and the grid-title
+prep action names grids from their surroundings.
+
+### Ask the assistant -- "tell it to change anything"
+
+- `app/chat_context.py`: the system prompt defines a change protocol. The
+  assistant can (a) request cell contents / grid rows / sheet listings /
+  function call sites it hasn't seen with a ```lookup block -- the app
+  answers within the same turn (up to 2 lookups) -- and (b) end its answer
+  with a ```changes block: `set_value`, `set_formula` (single cells or
+  ranges; relative references adjust like fill-down), `clear_cell`,
+  `rename_sheet`, `insert_row`, `insert_column`, `set_sheet_visibility`,
+  `unprotect_sheet`.
+- `app/prep.py::validate_proposal` checks every proposed operation against
+  the real workbook (sheet exists -- case-insensitive match --, cell/range
+  parses, formulas start with '=', sheet names legal and unique, row/column
+  valid) and looks up the current cell value for the before/after table;
+  malformed operations are reported, never applied.
+- UI: the proposal appears under the conversation as a before/after table
+  with **Apply** / **Discard**. Apply writes it through Excel to a fresh
+  copy, verifies the file opens, **re-analyzes it automatically** (so the
+  next question is answered against the changed workbook), notes the
+  outcome in the conversation and offers the changed file for download.
+  The model's text is never written into the workbook by itself.
+- Conversation notes (analysis / apply outcomes) are now part of the
+  history the model sees.
+
+### Prep workbook -- context-aware grid titles
+
+- `create_grid_titles` (replaces `title_untitled_grids`, now on by default)
+  gives every untitled grid exactly one `#Name` title:
+  - **caption above a table**: a text cell whose right neighbour is empty
+    while the row below starts a wider block -- Mind (and the app's
+    detection) read the caption as a one-column grid that swallows the
+    table's first column and the rest of the table as a second grid ("two
+    headers for one range"); the caption gets a `#` prefix and the table
+    becomes one grid;
+  - **empty cell above**: the name comes from a standalone label above
+    (blank row between) or to the left -- the label is *moved* into the
+    title (cleared afterwards), so no orphan text remains -- else from the
+    text header row, else sheet + position;
+  - **grid on row 1**: a row is inserted first (only when that cuts no
+    other grid), then the title is written at the post-insert coordinate.
+  - Names are made unique across the workbook; a grid that already has a
+    title, or contains a trapped title (STR-001), is never given another;
+    a standalone label that is not next to any grid is reported in the
+    action's skip notes rather than touched.
+- Executor: new `clear_cell`, `insert_column`, `set_sheet_visibility`
+  operations; range targets for value/formula ops; operations flagged
+  `after_inserts` run after the row/column inserts (post-insert
+  coordinates); openpyxl fallback handles cell ops on ranges and refuses
+  the structural ones.
+
+Tests: 64 (was 59): context titles on a fixture with every pattern
+(label above, caption, label left, header-row name, row-1 grid) plus an
+Excel-backed apply that re-analyzes to all grids titled and STR-004 PASS;
+proposal validation (good and bad ops); lookup round-trip and proposal
+extraction with a mocked gateway; applying an assistant proposal.
+
+## 1.4.0
+
+Two user-facing features on top of 1.3.0's verified outputs: the app now
+**applies real preparation changes** to the workbook (on approval) and has a
+**grounded, multi-turn assistant** for questions about the workbook.
+
+### Prep workbook -- actual changes, reviewed cell by cell
+
+- `app/prep.py` (new): `plan_actions()` turns findings into concrete
+  *operations* (op, sheet, cell/row, before, after, note) without touching
+  any file; `apply_operations()` copies the source (hash first), applies the
+  approved operations in **one Excel COM session**, saves, re-opens the
+  result in Excel to verify it loads, and appends the change-log sidecar.
+  openpyxl remains a fallback for value/formula operations only -- it
+  refuses structural ones (renames, row inserts, colours, protection)
+  because it cannot keep references/styles intact.
+- Actions (rule -> change; default-on unless noted):
+  - STR-007: hidden sheets renamed with the `&&Hide` marker (Excel updates
+    every formula reference on rename).
+  - LOOP-002 + RES-002: loop-name capitalisation normalised in MM_LOOP,
+    MM_RESULT, MM_DIMSIZE, MM_DIMINDEX, MM_LOOPLABELS string arguments.
+  - INP-005: `/Input` added to `/Reorder` grid titles.
+  - FLG-001: undocumented flags that are an unambiguous near-miss of a
+    documented one corrected (`/Inpt` -> `/Input`); ambiguous ones skipped
+    with a reason.
+  - EXP-003 / PRJ-002 / PAR-002 / INP-003: near-miss headers of the special
+    grids corrected to the documented column names (`Kind` -> `Type`,
+    `Setting` -> `Name`).
+  - STR-001: an empty row inserted above a `#Title` trapped inside a grid --
+    only when no other grid on the sheet spans that row (otherwise skipped
+    with the reason, never a blind insert).
+  - FMT-002: theme colours rewritten as explicit RGB (same look).
+  - Off by default (they change cell content or security): STR-004 generic
+    `#Grid_<sheet>_<anchor>` titles for untitled grids, FMT-003 apostrophe +
+    space in styled empty cells (KB recipe), FMT-005 sheet unprotect.
+- **Replace an incompatible formula** (FRM-002 / RSK-004 / FORMULA-002):
+  pick a flagged cell, optionally ask for an AI suggestion (the suggested
+  `=...` line pre-fills the box), edit the replacement yourself, apply. The
+  model's text is never written on its own -- only what you approve
+  (SKILL.md rule #6 still holds: formulas are never converted to values).
+- Every apply offers the prepared file for download and a one-click
+  re-analysis of it; the change log records method, verification and every
+  applied/failed operation.
+- Inventory now keeps the coordinates of theme-coloured and styled-empty
+  cells (capped at 5,000 per sheet) so those actions can target exact cells.
+
+### Ask about this workbook -- grounded assistant with memory
+
+- `app/chat_context.py` (new): each turn sends a bounded *context pack*
+  (workbook facts, every sheet with its grids/flags/headers, formula and MM_
+  statistics, every non-PASS finding in full, the PASS rule ids, and the
+  prep actions the app can apply) plus *retrieved detail* for whatever the
+  question names -- cell references (formula/value there, enclosing grid),
+  sheet and grid names (their rows), rule ids (the finding's observed
+  data), MM_ function names (call sites) -- and the conversation so far
+  (last 12 turns). The system prompt forbids inventing facts, forbids
+  claiming readiness, and routes fixes to "Prep workbook".
+- `app/llm.py`: generic `chat_completion()` over the same APIM Claude
+  gateway (system as leading message -- the proven payload shape);
+  `suggest_formula_fix` now uses it and asks for the replacement formula on
+  its own `=` line; `extract_formula()` picks it out for the UI.
+
+### UI
+
+- Sections: Findings / Prep workbook / Ask the assistant / Recalculate /
+  Reports, switched with a session-keyed radio rather than `st.tabs` --
+  tabs snap back to the first tab after every rerun, which hid the result
+  of a long Excel apply (caught by the Playwright check). The old
+  per-finding "Apply fix" buttons are superseded by the prep plan
+  (FILE-002 conversion still happens automatically for `.xlsb`).
+- Verified with Playwright on the broken synthetic model: 7 prep changes
+  applied through Excel and verified, prepared file downloaded with the
+  corrections in place, assistant answered a grounded question and routed
+  the fix to "Prep workbook".
+
+Tests: 59 (was 50) -- prep planning on the well-formed/broken/messy
+fixtures, openpyxl apply with re-validation, structural ops refused without
+Excel, one Excel-backed apply (rename + unprotect, verified), context pack
+and retrieval grounding, chat history threading and gateway payload shape
+(mocked).
+
+## 1.3.0
+
+Two things drove this release: hands-on proof that the app hands back a
+*working* Excel file, and implementing every rule against the Milliman Mind
+knowledge base (`CompleteMindDocn.docx`, a page-by-page scrape of
+kb.milliman-mind.com, 431 pages) instead of leaving 65 of 86 active rules
+at `NOT_SUPPORTED`.
+
+### Output workbooks are written by Excel, and verified
+
+- **Bug found and fixed**: the 1.2.0 report workbook did not open in Excel
+  when built from a real Mind workbook. `openpyxl` silently drops package
+  parts it doesn't model -- the test workbook carries a 13 MB Power Pivot
+  data model (`xl/model/item.data`) and 20 `customXml` parts -- and Excel
+  refused the result ("Open method of Workbooks class failed"), for `.xlsm`
+  and `.xlsx` alike. The output had shrunk from 13.7 MB to 0.5 MB.
+- `app/excel_com.py` (new): one shared Excel COM session helper (hidden,
+  alerts off, macros force-disabled, links never updated) plus
+  `verify_opens_in_excel()`, which is now the app's definition of "a real
+  working Excel file".
+- `app/excel_report.py`: `build_report_workbook` copies the analyzed file and
+  lets **Excel itself** append the `Mind_Readiness_Report` /
+  `_Summary` sheets (`Range.Value2` bulk write, formatting via COM), then
+  re-opens the result in Excel. Returns a `ReportBuildResult` (path,
+  method, `verified_opens_in_excel`, warnings). The openpyxl path is kept
+  only as a fallback for machines without Excel and is labelled reduced
+  fidelity. New `build_standalone_report()` writes a fresh Summary +
+  Findings `.xlsx` that is valid regardless of the source workbook.
+- `app/change_apply.py`: `fix_loop_case_mismatch` now plans its edits from
+  the analysis (`plan_loop_case_fix`) and writes them through Excel
+  (`Range.Formula` / `FormulaArray`), verifying the output opens; the change
+  log records `method` and `verified_opens_in_excel`. openpyxl fallback as
+  above. `convert_output_format` uses the shared session.
+- UI: "Generate reports" produces both downloads (standalone report always;
+  workbook copy + report only offered when Excel re-opened it) with a
+  visible verification line; fixed-workbook downloads show method and
+  verification; proper MIME types. Verified end-to-end with Playwright on
+  the real 13.7 MB `.xlsm`: uploaded, analyzed, both files downloaded, both
+  re-opened by Excel COM, all package parts intact (13,742,301 bytes).
+- COM proxies are scoped inside inner functions and collected before
+  `Excel.Quit()` (a proxy collected afterwards raises RPC_E_DISCONNECTED in
+  the GC, which faulthandler prints as a "Windows fatal exception").
+
+### Every active rule now has a real validator (94 of 94)
+
+- `tools/mine_kb_docx.py` (new, deterministic, zipfile + regex, no
+  python-docx): mines the KB scrape into
+  `references/mm-function-registry-kb.yaml` (117 MM_ functions, 100 with a
+  dedicated article: syntax, category, description), `references/
+  supported-excel-functions.yaml` (the KB's "Supported Excel formulas" list,
+  217 native functions -- the source the README said was missing) and
+  `references/mind-flags.yaml` (49 documented grid/header flags with their
+  argument shape and uniqueness, 6 markers; every entry is verified to occur
+  in the KB text or the script fails). Scrape artefacts (hyphenated /
+  concatenated tokens) are repaired.
+- `app/grids.py` (new): Mind's documented grid detection ("General
+  structure and guidelines": scan left-to-right/top-to-bottom, extend right
+  and down to the first empty cell, ignore alone text cells, text-only first
+  row = headers, `#Name /Flag1 /Flag2` title cell above the grid), with
+  `/Flag.(arg).x.y` parsing and header markers (`/HideRows`,
+  `/InstanceSelect`, `&&HideColumn`, `&hide`).
+- `app/formula_utils.py`: string literals and quoted sheet names are masked
+  before tokenizing; OOXML storage prefixes are stripped (`_xlfn.`,
+  `_xludf.`, `_xlpm.`, and `_xll.` -- Excel stores MMForExcel calls as
+  `_xll.MM_LOOP`, seen on the real workbook and previously a false
+  FORMULA-002 error); A1-reference parsing (`cell_refs_in_formula`,
+  `parse_ref`), literal helpers, call spans.
+- `app/inventory.py`: single-pass inventory now also captures array
+  formulas (openpyxl returns `ArrayFormula` objects, not `=` strings -- 103
+  in the real workbook were invisible to every formula check before),
+  data-table formulas, number-format categories vs the KB's preserved list,
+  theme colours, styled-empty cells, outlines/hidden rows+columns, data
+  validations, conditional formatting, sheet protection, tab colour,
+  `docProps/app.xml` Application, VBA part size, package parts only Excel
+  can preserve; plus a process-wide cache of the opened workbook
+  (`open_cached` / `cell_value`) for validators that read raw cells.
+  Real workbook: 3.6 s inventory, 1.3 s for all 94 validators.
+- **Fixed**: locked-cell counting (FMT-005) counted every cell, because
+  Excel locks cells by default; per the KB, locking only bites on a
+  *protected* sheet, so only those are counted now.
+- New validator modules: `iteration.py` (CAL-001..005: /CalculationSteps,
+  MM_ITERATIONS once per workbook, /iterationinput+/iterationoutput
+  pairing), `performance.py` (DBG-001..006: whole-column / >50k-cell
+  ranges, lookup review, profiler/debug/F9 recommendations), `io.py`
+  (INP-001..006, EXP-001..004: /Input naming, /InputSettings columns and
+  `{GridName}`-style patterns, /Reorder prerequisites, format-check
+  setting, /Export, unique /ExportSettings with documented columns,
+  booleans, extensions and `{yyyyMMdd}`-style tags), `lookup.py`
+  (LKP-001..005: MM_READTABLE range starts on a header row, Header names
+  exactly one column, duplicate key combinations, ≤6 comparisons,
+  not-found text vs NaN), `environment.py` (MMX-001..003: add-in
+  requirement and `_xludf.`/`_xll.` prefixes, saving application from
+  app.xml, MM_ function classification), `parameter.py` (PAR-001..004:
+  Label|Type|PossibleValues|Values, the nine types, `min|max|step` and
+  pipe-list syntax), `project.py` (PRJ-001..005: unique /ProjectSettings,
+  Name|Value|Locked|Hidden, hidden settings, stochastic configuration incl.
+  `#NbSimulations`, debug settings), `kb.py` (see new rules below).
+- Extended validators: `structure.py` (STR-001 merged-grid detection via a
+  trapped `#Title`, STR-002 alone text cells, STR-003 header recognition
+  incl. ERROR on header-matched flagged grids, STR-004 untitled grids,
+  STR-005/006 default sheet/workbook names, GRID-004 on real flags),
+  `format.py` (FMT-001 number formats outside Standard/Number/Text/Boolean/
+  Date, FMT-002 theme colours, FMT-003 styled empty cells, FMT-006
+  outlines, FORMAT-001 preservation inventory), `formula.py` (FRM-001
+  inventory; **FRM-002 now checks native functions against the KB list**
+  and MM_ functions against both registries -- MM_LOOPLABELS is no longer
+  a false error; FRM-003 `@` implicit intersection, spill references,
+  array formulas; FORMULA-002 VBA UDF detection with a read-only search of
+  `vbaProject.bin` for the name), `loop.py` (LOOP-004 MM_LOOPINSTANCE;
+  RES-001..005 MM_RESULT: loop names must exist with exact case, no loop
+  named twice, omitted dimensions are summed, SIM usage; RZS-001..007:
+  MM_SETSIZE `+` syntax / nesting / SetSize-of-SetSize, destination block
+  empty or holding the add-in's own copies, resize flags need a driver,
+  named groups need two members, fixed ranges that stop on a resizable
+  grid's edge, MM_GETRANGE), `risk.py` (RSK-001 two resize drivers in one
+  grid, RSK-002 array formulas past the grid boundary).
+- `rules/kb-rules.yaml` (new, category `kb`, 8 rules the readiness
+  standard doesn't have but the KB states): FLG-001 documented flags with
+  argument shape, GRP-001 `/Group.(Name).x.y`, BKP-001 backup
+  source/destination pairing + MM_BACKUPBUTTON placement, HID-001
+  /HideRows values, RNG-001 MM_RANGE alone in a single-cell table, UNQ-001
+  unique special grids, TRN-001 ISO 639-1 translation headers, SIM-001
+  `#NbSimulations` content. Rule set 1.2.0: 103 rules, 94 active, 9 draft
+  (INS-*/LNK-* multi-workbook, unchanged).
+- `app/validators/excel_functions.py`: catalog of native Excel function
+  names, used only to tell "native but not Mind-supported" (FRM-002) from
+  "not an Excel function at all" (FORMULA-002).
+- Report: `FIX_HINTS` for every new rule; `config/default.yaml`
+  `large_range_cells: 50000` (DBG-003).
+- Tests: 50 unit tests (was 30). `tests/kb_fixtures.py` builds a
+  well-formed Mind-style model (every KB-backed validator PASSes, or
+  WARNINGs where the KB only asks for review) and a deliberately broken one
+  (each validator fails on its own defect), plus array-formula / `@` /
+  XLOOKUP / UDF fixtures; pure tests for grid detection and the tokenizer;
+  the miner is re-run against the .docx when it is present and must
+  reproduce the checked-in files; two Excel-backed tests (skipped without
+  Excel) prove the written files open in Excel.
+
+Honesty notes: grid boundaries are this app's implementation of the
+documented algorithm, so findings that depend on them carry `INFERENCE`
+evidence; the KB's supported-function page is version-agnostic, so
+FORMULA-001 (per-version matrix) remains `NOT_SUPPORTED`; READY-001 still
+requires an explicit recalculation for PASS; nothing new is auto-applied.
+
+## 1.2.0
+
+UI, Excel-format report output, and real auto-fix/recalculation, in response
+to hands-on testing of 1.1.0 against a real workbook. Scope note: the mined
+rule set (rules/*.yaml) marks almost nothing `correction.automatic: true` by
+its own design (SKILL.md non-negotiable rules #4/#6) -- "auto-fix" here means
+genuinely automatic where a rule says it's safe, plus a one-click
+human-approved apply for everything else, not blind automatic correction of
+arbitrary findings.
+
+- `config/target-version.yaml`: `target_mind_version` defaults to `latest`
+  (was `null`). `FORMULA-001` no longer asks `REQUIRES_USER_INPUT` for a
+  missing version; it reports `NOT_SUPPORTED` (no compatibility matrix
+  exists yet, but a version *is* configured).
+- `app/excel_report.py` + `scripts/generate_report_workbook.py`: the primary
+  human-facing output is now an Excel workbook (a copy of the analyzed file
+  plus an appended `Mind_Readiness_Report` sheet: formatted findings table
+  with a deterministic "Recommended Fix" column, plus a summary sheet).
+  JSON (`validate_workbook.py`) remains available for scripting.
+- `app/recalc.py` (phase 9, real): Excel COM automation (win32com), macros
+  force-disabled (`AutomationSecurity`), scans for genuine formula errors
+  after `CalculateFullRebuild`. **Important finding from testing on this
+  machine**: no MMForExcel add-in is registered, so every `MM_` function call
+  shows `#NAME?` when recalculated here -- the adapter detects this (checks
+  COMAddIns/AddIns) and reports it as `NOT_SUPPORTED` with an explanation,
+  never as a false `ERROR`, separately from genuine formula errors.
+  Recalculation is a deliberate, separate action (`scripts/recalculate_workbook.py`,
+  the UI's Recalculate button) -- not run automatically during every
+  ANALYZE/VALIDATE pass (`modes/plan-mode.md`: "recalculation is optional").
+- `app/change_apply.py` (phase 8, narrow real scope): `convert_output_format`
+  (Excel COM Save-As, also used to auto-convert an uploaded `.xlsb` before
+  analysis -- openpyxl can't read `.xlsb` at all) and
+  `fix_loop_case_mismatch` (rewrites a case-inconsistent loop name to its
+  most-used spelling across every `MM_`-function string argument that uses
+  it). Every apply works on a fresh copy and writes an append-only JSON
+  change-log sidecar (`<file>.changelog.json`), never into the workbook.
+- `app/llm.py` (phase 7, narrow real scope): one on-demand "suggest a fix"
+  call for formula findings (Claude via the shared Milliman APIM gateway,
+  same `secret.key`/`config.enc` discovery convention as
+  `reserve_narrator/utils/key_loader.py`). Recommendation only, tagged
+  `RECOMMENDATION`, never auto-applied.
+- `app/ui/streamlit_app.py` + `run_excel_upload_prep.bat`: local web UI --
+  upload, run a mode, review findings, apply/suggest fixes per finding,
+  recalculate, download the Excel report. Verified end-to-end with a
+  real browser (Playwright) against this machine's Streamlit process,
+  including a real Claude-via-APIM call and a real Excel COM recalculation.
+- `app/validators/formula.py::unsupported_functions` (FRM-002) now locates
+  the actual sheet/cell/formula for each unregistered `MM_` call (previously
+  only the function name), so the report's Location column and the LLM
+  suggestion have real context instead of a bare name.
+- `tests/unit/test_excel_report.py`, `tests/unit/test_change_apply.py`: new.
+  `app/recalc.py`/`convert_output_format`'s Excel COM paths are not
+  unit-tested (require driving real Excel) -- verified manually/via
+  Playwright instead.
+
+## 1.1.0
+
+MVP implementation of CLAUDE_CODE_PROMPT.md phases 1-6 (models/schemas, rule
+registry, workbook inventory, deterministic validators, mode workflows).
+Phases 7-9 (LLM abstraction, change-set application, recalculation adapter)
+are **not** built yet -- `READY-001` always reports `NOT_SUPPORTED`, so
+`PASS` is unreachable in this version by design, per non-negotiable rule #5.
+
+- Mined `01_Mind_Readiness_Standard.md` (sibling doc, ~90 rules) into
+  `rules/*.yaml` via `tools/mine_readiness_standard.py`, and
+  `02_MM_Function_Registry.md` (35 MM functions) into
+  `references/mm-function-registry.yaml` via `tools/mine_function_registry.py`.
+  Both scripts are deterministic parsers, safe to re-run against updated
+  source docs.
+- **ID collision resolved**: the old hand-authored `loop-rules.yaml`
+  (`LOOP-001..003`) overlapped with the doc's own `LOOP-001..004`. The doc's
+  IDs are now canonical; the one rule with no doc equivalent (MM_LOOPLABELS
+  size matching) was kept, renamed to `LBL-001`.
+- **Category strings normalized** so every rule's `category` matches the
+  middle segment of its own `validation.implementation` path (`FORMAT-001`
+  was `formatting`, `GRID-001`/`GRID-004` were `grid`, `READY-001` was
+  `readiness` -- all fixed; a regression test guards this).
+- New `app/` package: domain models (`models.py`), rule loader
+  (`rules_engine.py`), workbook inventory (`inventory.py`, openpyxl +
+  zipfile, never executes VBA/links/OLE), preservation/package-diff
+  (`preservation.py`), readiness aggregation (`report.py`,
+  `NOT_SUPPORTED > ERROR > REQUIRES_USER_INPUT > WARNING > PASS`), and
+  validators/modes packages.
+- Implemented validators (everything else in the mined rule set is
+  registered but reports its own `on_unevaluable` status, never silently
+  skipped): `FILE-001/002`, `STR-001/004/007`, `GRID-001/004`,
+  `FMT-004/005/007`, `FRM-002/004`, `FORMULA-001`, `LOOP-001/002/003`,
+  `LBL-001`, `RSK-003/004/005`, `READY-001` (always `NOT_SUPPORTED`).
+- `INS-*`/`LNK-*` (instance/interlink -- inherently cross-workbook) mined as
+  `status: draft`, since `config/default.yaml` has
+  `multiple_workbook_context.enabled: false`.
+- `scripts/inventory_workbook.py`, `scripts/validate_workbook.py`,
+  `scripts/compare_packages.py` are now real (schema-valid JSON output).
+  `scripts/apply_changes.py`, `scripts/recalculate_workbook.py`,
+  `scripts/verify_recalculation.py` remain honest `NOT_SUPPORTED` stubs
+  (phases 8/9, deferred) but now emit schema-correct shapes.
+- `tests/unit/`: rule-schema conformance, inventory correctness, validator
+  PASS/FAIL behavior on synthetic fixtures (`tests/conftest.py`, built with
+  openpyxl at test time, clearly labeled per `tests/README.md`), and a full
+  `PLAN_MODE` run validated against `schemas/processing-result.schema.json`.
+
+## 1.0.0
+
+- Initial architecture package.

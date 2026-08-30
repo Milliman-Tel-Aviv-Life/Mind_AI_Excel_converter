@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Rule",
+  "type": "object",
+  "required": [
+    "id",
+    "version",
+    "status",
+    "category",
+    "description",
+    "confidence",
+    "priority",
+    "source",
+    "validation",
+    "on_unevaluable"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z]+-[0-9]{3}$"
+    },
+    "version": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "active",
+        "deprecated",
+        "retired"
+      ]
+    },
+    "category": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "confidence": {
+      "enum": [
+        "HIGH",
+        "MEDIUM",
+        "LOW"
+      ]
+    },
+    "priority": {
+      "enum": [
+        "REQUIRED",
+        "RECOMMENDED",
+        "INFORMATIONAL"
+      ]
+    },
+    "source": {
+      "type": "object"
+    },
+    "validation": {
+      "type": "object"
+    },
+    "correction": {
+      "type": "object"
+    },
+    "on_unevaluable": {
+      "enum": [
+        "PASS",
+        "WARNING",
+        "ERROR",
+        "REQUIRES_USER_INPUT",
+        "NOT_SUPPORTED"
+      ]
+    }
+  }
+}

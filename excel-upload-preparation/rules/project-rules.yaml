@@ -1,0 +1,104 @@
+version: 1.0.0
+rules:
+- id: PRJ-001
+  version: 1.0.0
+  status: active
+  category: project
+  description: 'Project Settings Inventory -- Inventory: /ProjectSettings'
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: PRJ-001
+  validation:
+    deterministic: false
+    implementation: validators.project.prj_001
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: INFO
+- id: PRJ-002
+  version: 1.0.0
+  status: active
+  category: project
+  description: 'Structure Validation -- Required columns: Name Value Locked Hidden'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: PRJ-002
+  validation:
+    deterministic: false
+    implementation: validators.project.prj_002
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH
+- id: PRJ-003
+  version: 1.0.0
+  status: active
+  category: project
+  description: Hidden Settings -- Review hidden settings.
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: PRJ-003
+  validation:
+    deterministic: false
+    implementation: validators.project.prj_003
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: PRJ-004
+  version: 1.0.0
+  status: active
+  category: project
+  description: 'Stochastic Configuration -- Review: Simulation settings'
+  confidence: HIGH
+  priority: RECOMMENDED
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: PRJ-004
+  validation:
+    deterministic: false
+    implementation: validators.project.prj_004
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: MEDIUM
+- id: PRJ-005
+  version: 1.0.0
+  status: active
+  category: project
+  description: 'Debug Configuration -- Review: Performance Profiler Debug Mode Stop On NaN'
+  confidence: HIGH
+  priority: INFORMATIONAL
+  source:
+    document: 01_Mind_Readiness_Standard.md
+    article: PRJ-005
+  validation:
+    deterministic: false
+    implementation: validators.project.prj_005
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: LOW
+- id: PRJ-006
+  version: 1.0.0
+  status: active
+  category: project
+  description: Setting Name Validity -- reject /ProjectSettings setting names Mind's converter does not recognise.
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-08-30)
+    article: PRJ-006
+  validation:
+    deterministic: true
+    implementation: validators.project.prj_006
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  severity_source: HIGH

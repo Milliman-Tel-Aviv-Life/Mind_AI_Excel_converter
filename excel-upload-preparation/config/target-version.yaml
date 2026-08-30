@@ -1,0 +1,3 @@
+target_mind_version: latest
+on_missing_version: REQUIRES_USER_INPUT
+version_overrides_path: rules/version-overrides
