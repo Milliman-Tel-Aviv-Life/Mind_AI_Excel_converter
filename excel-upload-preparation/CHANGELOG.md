@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.7.0
+
+### Grid Namer: the user draws the grid names, the conventions do the rest
+
+A new **Grid Namer** screen (sidebar), for the person who knows what a block
+of cells *means*: the whole current version of the workbook is shown sheet by
+sheet (calculated values where the file carries them, else the formula text;
+detected grids outlined and colour-coded — title cells, named grids, untitled
+grids, areas queued for naming). Drag over an area, give it a name, tick the
+documented flags (`/Input`, `/Export`, …, from `references/mind-flags.yaml`;
+flags with arguments typed as text), and **Submit** writes the
+`#Name /Flags` titles into a new Excel-verified version. Everything the user
+did not touch is titled in the same apply by the existing conventions
+(captions, labels, headers, assistant names) — optional, on by default.
+
+- **Naming labels Mind's detection, it does not redraw it**: each selection is
+  resolved to the one detected grid it touches. A selection across several
+  grids is refused with their refs ("Mind reads them separately"); the one
+  exception is the documented caption-above-a-table pair, which is exactly
+  what a user selects as "one table" — the caption becomes the title and the
+  pair becomes one named grid.
+- **Same reference-safety rules as the automatic titler** (`plan_named_areas`
+  in `app/prep.py`): a title cell, above-cell or row insert that some formula
+  reads is refused with the reader named; a refused area is also excluded from
+  the automatic pass (retrying would only repeat the refusal). Renaming a
+  titled grid releases its old name; user names are reserved so the automatic
+  pass uniquifies against them (`plan_create_grid_titles` grew
+  `exclude` / `reserved` / `pre_titled` / `pre_inserted` for this — one
+  combined apply, no collisions, shared row inserts).
+- **Endpoints**: `GET /api/sessions/{id}/sheet-cells` (one sheet's used area,
+  value-or-formula per cell, from the last recalculation when there is one),
+  `GET /api/mind-flags` (documented title flags with their meaning),
+  `POST /api/sessions/{id}/grid-namer` (plan manual + automatic titles, apply
+  via Excel, new version `source: "grid_namer"`, re-analysis, refusals with
+  reasons in `skipped`).
+- **Browser tab** now reads `MindPrep v<version>` from the running backend
+  (`document.title` after `/api/health`; static fallback "MindPrep" in the
+  built page).
+- **One half of an untitled caption pair is extended to the pair** (found by
+  the live smoke test on the caption layout): naming only the table half
+  would leave the caption column to the automatic pass, whose separate title
+  lands adjacent and makes the re-detected grids merge wrongly. The UI's
+  selection panel mirrors the extension ("+ its table, named as one grid").
+- Tests: `tests/unit/test_grid_namer.py` — 11 new (resolution, caption pair,
+  pair extension from one half, canonical flag casing, unknown-flag refusal,
+  read-title refusal, old-name release, reserved-name uniquifying, shared row
+  inserts, and the three endpoints end-to-end through the FastAPI
+  TestClient). 135 total.
+
 ## 1.6.8
 
 ### The app runs itself against real Milliman Mind

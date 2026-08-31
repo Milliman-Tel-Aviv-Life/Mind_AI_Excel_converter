@@ -22,7 +22,7 @@ Provider-neutral, Python-oriented instruction and rule package for preparing Exc
 
 `PASS`, `WARNING`, `ERROR`, `REQUIRES_USER_INPUT`, `NOT_SUPPORTED`.
 
-## Current status (1.6.8)
+## Current status (1.7.0)
 
 All 12 phases have a real implementation, and **every active rule (94 of
 94) has a real validator** -- nothing falls through to `NOT_SUPPORTED` any
@@ -45,6 +45,14 @@ more except the two honest cases below.
   ask the APIM assistant for a context-aware name instead (one batched call,
   `POST /api/sessions/{id}/grid-names`). Assistant names are advisory: they
   only change *which* name a reviewable prep operation writes (1.6.7).
+- **Grid Namer** (1.7.0): a screen where the *user* names grids by hand --
+  the whole current version is shown sheet by sheet with the detected grids
+  outlined; drag over an area, type a name, tick documented flags, Submit.
+  `plan_named_areas` (app/prep.py) resolves each selection to the grid Mind's
+  detection sees there (or the caption-above-a-table pair), writes the
+  `#Name /Flags` title under the same reference-safety rules, and the
+  automatic titler names everything else in the same apply without colliding
+  (user names reserved, user grids excluded, row inserts shared).
 - **Runs itself in Milliman Mind** (1.6.8): `app/mind_loop.py` /
   `scripts/run_in_mind.py` / the **Mind** screen take a raw model and, with
   nobody in the loop, prepare → verify the numbers (full Excel recalculation

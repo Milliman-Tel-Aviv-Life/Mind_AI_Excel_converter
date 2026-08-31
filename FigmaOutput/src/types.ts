@@ -193,7 +193,7 @@ export interface Version {
   file_name: string;
   sha256: string;
   created_at: string;
-  source: "upload" | "prep" | "assistant" | "formula" | "convert";
+  source: "upload" | "prep" | "assistant" | "formula" | "convert" | "grid_namer";
   change_log: Operation[];
   verified_opens_in_excel: boolean | null;
 }

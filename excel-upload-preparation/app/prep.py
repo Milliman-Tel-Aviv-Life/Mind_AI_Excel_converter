@@ -38,7 +38,7 @@ import openpyxl
 from .change_apply import append_change_log, plan_loop_case_fix
 from .excel_com import close_quietly, com_available, excel_session, open_workbook, verify_opens_in_excel
 from .formula_utils import cell_refs_in_formula, col_to_num, mask_strings, num_to_col, parse_ref, ref_text
-from .grids import all_grids, grid_containing, looks_like_title
+from .grids import all_grids, grid_containing, looks_like_title, parse_flags
 from .inventory import cell_value, make_immutable_copy, sha256_of
 from .validators.io import EXPORT_COLUMNS
 from .validators.kb import documented_flags
@@ -401,7 +401,15 @@ def is_weak_name(name: str | None, sheet: str) -> bool:
     return bool(re.fullmatch(r"[I|\s.]+", text))
 
 
-def plan_create_grid_titles(analysis, report, names: dict[str, str] | None = None) -> tuple[list[dict], list[str]]:
+def plan_create_grid_titles(
+    analysis,
+    report,
+    names: dict[str, str] | None = None,
+    exclude: set[str] | None = None,
+    reserved: set[str] | list[str] | None = None,
+    pre_titled: set[tuple[str, str]] | None = None,
+    pre_inserted: dict[str, set[int]] | None = None,
+) -> tuple[list[dict], list[str]]:
     """STR-004 / STR-002 / STR-001: every untitled grid gets exactly one
     '#Name' title with a name taken from its surroundings.
 
@@ -424,16 +432,23 @@ def plan_create_grid_titles(analysis, report, names: dict[str, str] | None = Non
     (app/grid_naming.py). It is only ever consulted when the deterministic
     name would be a weak one, and it goes through the same cleaning and
     uniqueness rules, so it can change *which* name is written but never
-    where it is written or whether the operation is safe."""
+    where it is written or whether the operation is safe.
+
+    `exclude` / `reserved` / `pre_titled` / `pre_inserted` come from the Grid
+    Namer (plan_named_areas): grids the user handled by hand are left alone,
+    their chosen names are already taken, and their write sites and row
+    inserts count as used, so one combined apply never collides."""
     ops: list[dict[str, Any]] = []
     skipped: list[str] = []
+    exclude = exclude or set()
     grids = all_grids(analysis)
     index = reference_index(analysis)
     used = {g["name"].strip().lower() for g in grids if g.get("name")}
+    used |= {str(n).strip().lower() for n in (reserved or ()) if str(n).strip()}
     labels = standalone_labels(analysis)
     consumed: set[tuple[str, str]] = set()
-    titled_cells: set[tuple[str, str]] = set()
-    inserted_rows: dict[str, set[int]] = {}
+    titled_cells: set[tuple[str, str]] = set(pre_titled or ())
+    inserted_rows: dict[str, set[int]] = {k: set(v) for k, v in (pre_inserted or {}).items()}
     by_sheet: dict[str, list[dict[str, Any]]] = {}
     for g in grids:
         by_sheet.setdefault(g["sheet"], []).append(g)
@@ -447,6 +462,8 @@ def plan_create_grid_titles(analysis, report, names: dict[str, str] | None = Non
         right = [h for h in by_sheet.get(g["sheet"], []) if h is not g and h["first_row"] == r0 + 1 and h["first_col"] == c0 + 1]
         if not right:
             continue
+        if f"{g['sheet']}!{g['ref']}" in exclude or f"{right[0]['sheet']}!{right[0]['ref']}" in exclude:
+            continue  # the user named this pair (or one of it) in the Grid Namer
         caption = str(g["header_values"][0])
         reader = referenced_by(index, g["sheet"], r0, c0)
         if reader:
@@ -462,7 +479,7 @@ def plan_create_grid_titles(analysis, report, names: dict[str, str] | None = Non
 
     # B / C. every other untitled grid
     for g in grids:
-        if g.get("name") or id(g) in caption_handled:
+        if g.get("name") or id(g) in caption_handled or f"{g['sheet']}!{g['ref']}" in exclude:
             continue
         if g.get("inner_title_cells"):
             skipped.append(f"{g['sheet']}!{g['ref']}: contains a trapped '#Title' (STR-001) -- separate the grids first")
@@ -529,6 +546,217 @@ def plan_create_grid_titles(analysis, report, names: dict[str, str] | None = Non
         if (lab["sheet"], lab["cell"]) not in consumed and not (lab["sheet"], lab["cell"]) in titled_cells:
             skipped.append(f"standalone text '{str(lab['text'])[:30]}' at {lab['sheet']}!{lab['cell']} is not next to a grid -- Mind ignores it; move it or delete it by hand")
     return ops, skipped
+
+
+def _canonical_flags(flags: Any, docs: dict[str, dict[str, Any]]) -> tuple[list[str], list[str]]:
+    """User-typed flags -> ('Input', 'Resize.A', ...) with the documented casing
+    for the name part; anything that does not parse as exactly one '/Flag'
+    token comes back in the second list."""
+    out: list[str] = []
+    bad: list[str] = []
+    seen: set[str] = set()
+    for f in flags or []:
+        text = str(f).strip().lstrip("/").strip()
+        if not text:
+            continue
+        parsed = parse_flags("/" + text)
+        if len(parsed) != 1 or parsed[0]["raw"] != "/" + text:
+            bad.append(str(f))
+            continue
+        spec = docs.get(parsed[0]["name"])
+        if spec:
+            text = spec["name"] + text[len(parsed[0]["raw_name"]):]
+        if text.lower() in seen:
+            continue
+        seen.add(text.lower())
+        out.append(text)
+    return out, bad
+
+
+def plan_named_areas(analysis: dict[str, Any], areas: list[dict[str, Any]]) -> dict[str, Any]:
+    """The Grid Namer screen (1.7.0): the user selected an area of a sheet,
+    chose a name and flags, and submitted. Naming cannot redraw Mind's grid
+    boundaries -- only label what its detection already sees -- so each area
+    is resolved to the detected grid it touches (exactly one, or the
+    documented caption-above-a-table pair) and the '#Name /Flags' title is
+    written with the same reference-safety rules as create_grid_titles: a
+    write site some formula reads is refused, with the reader named.
+
+    areas: [{"sheet", "ref", "name", "flags": ["Input", ...]}], ref being the
+    user's selection (a cell or a range) in that sheet.
+
+    Returns {"ops", "skipped", "named" (grid keys "Sheet!Ref" a title was
+    planned for), "exclude" (grid keys the automatic pass must leave alone,
+    including refused ones -- retrying them would only repeat the refusal),
+    "reserved" (names now taken), "titled_cells", "inserted_rows"} -- the last
+    four feed plan_create_grid_titles so one combined apply never collides."""
+    ops: list[dict[str, Any]] = []
+    skipped: list[str] = []
+    named: list[str] = []
+    exclude: set[str] = set()
+    reserved: list[str] = []
+    titled_cells: set[tuple[str, str]] = set()
+    inserted_rows: dict[str, set[int]] = {}
+    grids = all_grids(analysis)
+    index = reference_index(analysis)
+    docs = documented_flags()
+    by_sheet: dict[str, list[dict[str, Any]]] = {}
+    for g in grids:
+        by_sheet.setdefault(g["sheet"], []).append(g)
+
+    # Resolve every area first: a grid the user is renaming releases its old name.
+    resolved: list[dict[str, Any]] = []
+    for area in areas:
+        sheet = str(area.get("sheet") or "")
+        label = f"{sheet}!{area.get('ref')}"
+        r = parse_ref(str(area.get("ref") or "").split("!")[-1])
+        if r is None:
+            skipped.append(f"{label}: not a cell or range reference")
+            continue
+        if sheet not in by_sheet:
+            skipped.append(f"{label}: no grids detected on this sheet")
+            continue
+        name = _clean_name(area.get("name") or "")
+        if not name:
+            skipped.append(f"{label}: the name is empty once cleaned up -- give the area a real name")
+            continue
+        flags, bad = _canonical_flags(area.get("flags"), docs)
+        if bad:
+            skipped.append(f"{label}: unrecognisable flag(s) {', '.join(bad)} -- nothing was written for this area")
+            continue
+        r1, r2 = min(r["r1"], r["r2"]), max(r["r1"], r["r2"])
+        c1, c2 = min(r["c1"], r["c2"]), max(r["c1"], r["c2"])
+        hits = []
+        for g in by_sheet[sheet]:
+            t = parse_ref(g["title_cell"]) if g.get("title_cell") else None
+            in_rect = not (g["last_row"] < r1 or g["first_row"] > r2 or g["last_col"] < c1 or g["first_col"] > c2)
+            on_title = t is not None and r1 <= t["r1"] <= r2 and c1 <= t["c1"] <= c2
+            if in_rect or on_title:
+                hits.append(g)
+        if len(hits) == 1:
+            # A hit that is one half of an untitled caption-above-a-table pair is
+            # extended to the pair: titling only one half would leave the other to
+            # the automatic pass, whose separate title lands adjacent and makes the
+            # re-detected grids merge wrongly (seen live on the caption layout).
+            g = hits[0]
+            cap = table = None
+            if not g.get("name"):
+                if g["n_cols"] == 1 and _is_text(g.get("header_values", [None])[0]):
+                    t = [h for h in by_sheet[sheet] if h is not g and not h.get("name") and h["first_row"] == g["first_row"] + 1 and h["first_col"] == g["first_col"] + 1]
+                    if t:
+                        cap, table = g, t[0]
+                if cap is None:
+                    c = [
+                        h for h in by_sheet[sheet]
+                        if h is not g and not h.get("name") and h["n_cols"] == 1 and _is_text(h.get("header_values", [None])[0])
+                        and g["first_row"] == h["first_row"] + 1 and g["first_col"] == h["first_col"] + 1
+                    ]
+                    if c:
+                        cap, table = c[0], g
+            resolved.append({"grid": cap or g, "name": name, "flags": flags, "table": table})
+            continue
+        # the documented caption-above-a-table split reads as two grids; the
+        # user naturally selects both -- turning the caption into the title
+        # merges them into one named grid
+        if len(hits) == 2:
+            for cap, table in ((hits[0], hits[1]), (hits[1], hits[0])):
+                if (
+                    not cap.get("name") and cap["n_cols"] == 1 and _is_text(cap.get("header_values", [None])[0])
+                    and table["first_row"] == cap["first_row"] + 1 and table["first_col"] == cap["first_col"] + 1
+                ):
+                    resolved.append({"grid": cap, "name": name, "flags": flags, "table": table})
+                    break
+            else:
+                skipped.append(f"{label}: the selection touches 2 grids ({hits[0]['ref']}, {hits[1]['ref']}) -- Mind reads them separately; select and name one at a time")
+            continue
+        if not hits:
+            skipped.append(f"{label}: Mind detects no grid there (an alone text cell or empty space is ignored) -- nothing to name")
+        else:
+            skipped.append(f"{label}: the selection touches {len(hits)} grids ({', '.join(h['ref'] for h in hits[:6])}) -- Mind reads them separately; select and name one at a time")
+
+    retitled = {id(item["grid"]) for item in resolved}
+    used = {g["name"].strip().lower() for g in grids if g.get("name") and id(g) not in retitled}
+
+    for item in resolved:
+        g, table = item["grid"], item["table"]
+        gkey = f"{g['sheet']}!{g['ref']}"
+        exclude.add(gkey)
+        if table is not None:
+            exclude.add(f"{table['sheet']}!{table['ref']}")
+        unique = _unique_name(item["name"], used)
+        suffix = "" if unique == item["name"] else f" (made unique: '{item['name']}' is already a grid name)"
+        title = "#" + unique + "".join(f" /{f}" for f in item["flags"])
+
+        if table is not None:  # caption case: the caption cell becomes the title of the table below
+            reader = referenced_by(index, g["sheet"], g["first_row"], g["first_col"])
+            if reader:
+                skipped.append(f"{gkey}: the caption is read by {reader} -- turning it into a title would change that result")
+                continue
+            ops.append(_op("set_value", "named_areas", "STR-004", g["sheet"], cell=g["anchor"], before=g["header_values"][0], after=title, note=f"user-chosen name; the caption becomes the title of the table {table['ref']}{suffix}"))
+            titled_cells.add((g["sheet"], g["anchor"]))
+            named.append(gkey)
+            reserved.append(unique)
+            continue
+
+        if g.get("title_cell"):  # already titled: rewrite the title cell
+            if (g.get("title") or "").strip() == title:
+                skipped.append(f"{gkey}: already titled exactly '{title}'")
+                reserved.append(unique)
+                continue
+            t = parse_ref(g["title_cell"])
+            reader = referenced_by(index, g["sheet"], t["r1"], t["c1"]) if t else None
+            if reader:
+                skipped.append(f"{gkey}: the title cell {g['title_cell']} is read by {reader} -- rewriting it would change that result")
+                continue
+            ops.append(_op("set_value", "named_areas", "STR-004", g["sheet"], cell=g["title_cell"], before=g["title"], after=title, note=f"user-chosen name and flags{suffix}"))
+            titled_cells.add((g["sheet"], g["title_cell"]))
+            named.append(gkey)
+            reserved.append(unique)
+            continue
+
+        # untitled: same write sites and safety checks as create_grid_titles
+        r0, c0 = g["first_row"], g["first_col"]
+        above_cell = ref_text(c0, r0 - 1) if r0 > 1 else None
+        above_val = cell_value(analysis, g["sheet"], r0 - 1, c0) if r0 > 1 else None
+        above_is_free = (
+            r0 > 1
+            and (g["sheet"], above_cell) not in titled_cells
+            and (above_val is None or (isinstance(above_val, str) and above_val.strip() == ""))
+            and grid_containing(by_sheet.get(g["sheet"], []), r0 - 1, c0) is None
+        )
+        if above_is_free:
+            reader = referenced_by(index, g["sheet"], r0 - 1, c0)
+            if reader:
+                skipped.append(f"{gkey}: the cell above ({above_cell}) is read by {reader} -- a title there would change that result")
+                continue
+            ops.append(_op("set_value", "named_areas", "STR-004", g["sheet"], cell=above_cell, before=None, after=title, note=f"user-chosen name and flags{suffix}"))
+            titled_cells.add((g["sheet"], above_cell))
+        else:
+            reason = "starts on row 1" if r0 == 1 else f"the cell above ({above_cell}) is not free"
+            already = r0 in inserted_rows.get(g["sheet"], set())
+            if not already:
+                cutting = _row_insert_is_safe(grids, g["sheet"], r0, own=g)
+                if cutting:
+                    skipped.append(f"{gkey}: {reason} and inserting a row would cut {cutting[0]['display_name']}")
+                    continue
+                whole = whole_reference_to(index, g["sheet"])
+                if whole:
+                    skipped.append(f"{gkey}: {reason} and inserting a row would shift what {whole} counts or indexes over whole columns of this sheet")
+                    continue
+            reader = referenced_by(index, g["sheet"], r0, c0)
+            if reader:
+                skipped.append(f"{gkey}: {reason} and the title row would fall inside the range {reader} reads")
+                continue
+            if not already:
+                before = f"grid {g['ref']} starts on row 1" if r0 == 1 else f"'{above_val}' sits directly above grid {g['ref']}"
+                ops.append(_op("insert_row", "named_areas", "STR-004", g["sheet"], row=r0, before=before, after=f"empty row {r0} inserted (the grid moves down one row)", note="makes room for the user-chosen title; Excel shifts every reference automatically"))
+                inserted_rows.setdefault(g["sheet"], set()).add(r0)
+            ops.append(_op("set_value", "named_areas", "STR-004", g["sheet"], cell=ref_text(c0, r0), before=None, after=title, note=f"user-chosen name and flags{suffix}; written after the row insert", after_inserts=True, insert_at=r0))
+            titled_cells.add((g["sheet"], ref_text(c0, r0)))
+        named.append(gkey)
+        reserved.append(unique)
+
+    return {"ops": ops, "skipped": skipped, "named": named, "exclude": exclude, "reserved": reserved, "titled_cells": titled_cells, "inserted_rows": inserted_rows}
 
 
 def plan_explicit_colors(analysis, report) -> tuple[list[dict], list[str]]:

@@ -264,6 +264,68 @@ export async function suggestGridNames(sessionId: string, apply = true): Promise
   return post<GridNamesResult>(`/sessions/${encodeURIComponent(sessionId)}/grid-names`, { apply });
 }
 
+// --- Grid Namer (1.7.0) ---------------------------------------------------------------
+
+/** One sheet of the current version, cell by cell (calculated value where the file carries one, else the formula text). */
+export interface SheetCells {
+  sheet: string;
+  rows: unknown[][];
+  n_rows: number;
+  n_cols: number;
+  total_rows: number;
+  total_cols: number;
+  truncated: boolean;
+  values_from: string;
+}
+
+export async function sheetCells(sessionId: string, sheet: string, maxRows = 400, maxCols = 60): Promise<SheetCells> {
+  if (USE_MOCKS) {
+    await delay(300);
+    return { sheet, rows: [["Header", 1], [null, 2]], n_rows: 2, n_cols: 2, total_rows: 2, total_cols: 2, truncated: false, values_from: "mock" };
+  }
+  const q = new URLSearchParams({ sheet, max_rows: String(maxRows), max_cols: String(maxCols) });
+  return unwrap<SheetCells>(await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/sheet-cells?${q}`));
+}
+
+/** A documented Mind title flag (references/mind-flags.yaml). */
+export interface MindFlag { name: string; meaning: string }
+
+export async function mindFlags(): Promise<MindFlag[]> {
+  if (USE_MOCKS) {
+    await delay(100);
+    return [{ name: "Input", meaning: "Assumptions-only input grid." }];
+  }
+  return (await unwrap<{ flags: MindFlag[] }>(await fetch(`${API}/mind-flags`))).flags;
+}
+
+/** One user-named area: the selection, the chosen name, the chosen flags. */
+export interface NamedArea { sheet: string; ref: string; name: string; flags: string[] }
+
+export interface GridNamerOutcome extends Partial<Reanalysis> {
+  result: ApplyResult;
+  version: Version;
+  /** Grid keys ("Sheet!Ref") a title was written for. */
+  named: string[];
+  /** Refused areas and automatic-titler skips, each with its reason. */
+  skipped: string[];
+  manual_ops: number;
+  auto_ops: number;
+}
+
+/**
+ * Submit of the Grid Namer screen: writes a '#Name /Flags' title for each
+ * named area (reference-safety rules apply -- refusals come back in `skipped`),
+ * optionally titles every remaining untitled grid by the existing conventions,
+ * and returns the new verified version plus its re-analysis.
+ */
+export async function applyNamedAreas(sessionId: string, areas: NamedArea[], nameRest: boolean): Promise<GridNamerOutcome> {
+  if (USE_MOCKS) {
+    await delay(1500);
+    throw new Error("not available in mock mode");
+  }
+  return post<GridNamerOutcome>(`/sessions/${encodeURIComponent(sessionId)}/grid-namer`, { areas, nameRest, reanalyze: true });
+}
+
 /** Options for the autonomous run-in-Mind loop (app/mind_loop.py). */
 export interface MindLoopOptions {
   maxIterations?: number;

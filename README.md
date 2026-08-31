@@ -37,7 +37,7 @@ run_mind_ready_web.bat
 That opens <http://localhost:8600>. Check <http://localhost:8600/api/health>:
 
 ```json
-{"version":"1.6.8","excel":true,"assistant":false,"rules":96,"frontend":true}
+{"version":"1.7.0","excel":true,"assistant":false,"rules":96,"frontend":true}
 ```
 
 - `excel:true` — Excel is reachable through COM. Without it the app analyses
@@ -49,7 +49,9 @@ That opens <http://localhost:8600>. Check <http://localhost:8600/api/health>:
 - `assistant:false` — expected on a fresh machine; see the next section.
 
 Then: **Workbook** → upload → **Findings** → **Prep** (tick what you approve,
-Apply) → **Download** in the sidebar. Full walkthrough:
+Apply) → **Download** in the sidebar. To name grids yourself, **Grid Namer**:
+drag over an area of the sheet, type a name, tick flags, Submit — everything
+you did not touch is named by the usual conventions. Full walkthrough:
 [`excel-upload-preparation/docs/RUN_IN_MIND.md`](excel-upload-preparation/docs/RUN_IN_MIND.md).
 
 ## Optional pieces
@@ -81,7 +83,7 @@ cd excel-upload-preparation
 python -m pytest tests -q
 ```
 
-124 tests. The ones that write through Excel or recalculate skip themselves on
+135 tests. The ones that write through Excel or recalculate skip themselves on
 a machine without Excel (so the suite also runs on Linux — it just proves less
 there).
 

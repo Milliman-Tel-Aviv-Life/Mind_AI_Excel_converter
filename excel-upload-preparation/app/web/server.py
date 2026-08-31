@@ -46,8 +46,9 @@ from app.llm import extract_formula, llm_available, suggest_formula_fix  # noqa:
 from app.modes import fix_incompatible_formulas, plan_mode, prep_mind_loops, structure_fix  # noqa: E402
 from app.grid_naming import build_grid_context, suggest_names  # noqa: E402
 from app.mind_loop import LoopConfig, run_loop, summarize  # noqa: E402
-from app.grids import all_grids  # noqa: E402
-from app.prep import ASSISTANT_OPS, STRUCTURAL_OPS, apply_operations, deterministic_name, is_weak_name, plan_actions, standalone_labels  # noqa: E402
+from app.grids import all_grids, json_safe  # noqa: E402
+from app.prep import ASSISTANT_OPS, STRUCTURAL_OPS, apply_operations, deterministic_name, is_weak_name, plan_actions, plan_create_grid_titles, plan_named_areas, standalone_labels  # noqa: E402
+from app.validators.kb import documented_flags  # noqa: E402
 from app.recalc import group_errors, recalculate  # noqa: E402
 from app.prep import _cells_of as _array_cells  # noqa: E402
 from app.prep import array_size_hint  # noqa: E402
@@ -604,6 +605,134 @@ def cells(session_id: str, sheet: str, cell: str, rows: int = 3, cols: int = 3) 
         raise HTTPException(status_code=409, detail="no analysis yet")
     fresh = s.recalc_path if (s.recalc_path and s.recalc_version_id == s.current_version_id and Path(s.recalc_path).is_file()) else None
     return cell_window(s.result["workbook_analysis"], sheet, cell, rows=rows, cols=cols, values_path=fresh)
+
+
+# --- Grid Namer (1.7.0) ---------------------------------------------------------------
+@app.get("/api/mind-flags")
+def mind_flags() -> dict[str, Any]:
+    """The documented Mind title flags (references/mind-flags.yaml), for the
+    Grid Namer's flag picker. Header-cell markers and alias spellings are
+    left out -- they are not written into a grid title."""
+    flags = [
+        {"name": spec["name"], "meaning": spec.get("meaning", "")}
+        for spec in documented_flags().values()
+        if spec.get("where", "title") == "title" and not spec.get("alias_of")
+    ]
+    return {"flags": sorted(flags, key=lambda f: f["name"].lower())}
+
+
+@app.get("/api/sessions/{session_id}/sheet-cells")
+def sheet_cells(session_id: str, sheet: str, max_rows: int = 400, max_cols: int = 60) -> dict[str, Any]:
+    """The whole (used) area of one sheet of the current version, for the Grid
+    Namer's workbook view: per cell the calculated value when the file carries
+    one, else the formula text. Values come from the last recalculation of the
+    current version when there is one, else from the analysis copy."""
+    s = _session(session_id)
+    if not s.result:
+        raise HTTPException(status_code=409, detail="no analysis yet")
+    analysis = s.result["workbook_analysis"]
+    if sheet not in {sh["name"] for sh in analysis["workbooks"][0]["sheets"]}:
+        raise HTTPException(status_code=404, detail=f"no sheet {sheet!r}")
+    fresh = s.recalc_path if (s.recalc_path and s.recalc_version_id == s.current_version_id and Path(s.recalc_path).is_file()) else None
+    path = Path(fresh or analysis["source"]["copy_path"])
+    max_rows, max_cols = max(1, min(int(max_rows), 2000)), max(1, min(int(max_cols), 200))
+
+    import openpyxl
+
+    raw_wb = openpyxl.load_workbook(path, read_only=True, data_only=False)
+    val_wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+    try:
+        ws_raw, ws_val = raw_wb[sheet], val_wb[sheet]
+        if not hasattr(ws_raw, "iter_rows"):
+            raise HTTPException(status_code=422, detail=f"{sheet} is a chart sheet -- there are no cells to show")
+        total_rows, total_cols = int(ws_raw.max_row or 0), int(ws_raw.max_column or 0)
+        rows: list[list[Any]] = []
+        for raw_row, val_row in zip(
+            ws_raw.iter_rows(min_row=1, max_row=min(total_rows, max_rows) or 1, max_col=min(total_cols, max_cols) or 1, values_only=True),
+            ws_val.iter_rows(min_row=1, max_row=min(total_rows, max_rows) or 1, max_col=min(total_cols, max_cols) or 1, values_only=True),
+        ):
+            rows.append([json_safe(v if v is not None else raw) for raw, v in zip(raw_row, val_row)])
+        while rows and all(v is None or v == "" for v in rows[-1]):
+            rows.pop()
+        width = 0
+        for row in rows:
+            for i in range(len(row) - 1, width - 1, -1):
+                if row[i] is not None and row[i] != "":
+                    width = i + 1
+                    break
+        rows = [row[:width] for row in rows]
+    finally:
+        raw_wb.close()
+        val_wb.close()
+    return {
+        "sheet": sheet,
+        "rows": rows,
+        "n_rows": len(rows),
+        "n_cols": width if rows else 0,
+        "total_rows": total_rows,
+        "total_cols": total_cols,
+        "truncated": total_rows > max_rows or total_cols > max_cols,
+        "values_from": "recalculation" if fresh else "analysis copy",
+    }
+
+
+@app.post("/api/sessions/{session_id}/grid-namer")
+def grid_namer(session_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """The Grid Namer's Submit: each user-selected area becomes a '#Name /Flags'
+    grid title (written with the reference-safety rules -- a refused area comes
+    back in `skipped` with the reason); with nameRest (default) every other
+    untitled grid is titled by the existing conventions in the same apply. The
+    result is a new verified version of the workbook."""
+    s = _session(session_id)
+    if not s.result:
+        raise HTTPException(status_code=409, detail="no analysis yet")
+    raw_areas = payload.get("areas")
+    if not isinstance(raw_areas, list) or not raw_areas:
+        raise HTTPException(status_code=422, detail="areas must be a non-empty list")
+    areas = []
+    for i, a in enumerate(raw_areas, start=1):
+        if not isinstance(a, dict) or not isinstance(a.get("sheet"), str) or not isinstance(a.get("ref"), str) or not str(a.get("name") or "").strip():
+            raise HTTPException(status_code=422, detail=f"area {i}: sheet, ref and name are required")
+        flags = a.get("flags") or []
+        if not isinstance(flags, list):
+            raise HTTPException(status_code=422, detail=f"area {i}: flags must be a list of flag names")
+        areas.append({"sheet": a["sheet"], "ref": a["ref"], "name": str(a["name"]), "flags": [str(f) for f in flags]})
+
+    analysis, report = s.result["workbook_analysis"], s.result["validation_report"]
+    manual = plan_named_areas(analysis, areas)
+    ops = list(manual["ops"])
+    skipped = list(manual["skipped"])
+    if not ops:
+        raise HTTPException(status_code=422, detail="no area could be named: " + ("; ".join(skipped[:8]) or "nothing resolved"))
+    auto_count = 0
+    if bool(payload.get("nameRest", True)):
+        auto_ops, auto_skipped = plan_create_grid_titles(
+            analysis, report, s.grid_names or None,
+            exclude=manual["exclude"], reserved=manual["reserved"],
+            pre_titled=manual["titled_cells"], pre_inserted=manual["inserted_rows"],
+        )
+        ops += auto_ops
+        skipped += auto_skipped
+        auto_count = len(auto_ops)
+
+    res = apply_operations(s.current_path, s.work_dir / "apply", ops)
+    if res["status"] == "NOT_APPLICABLE":
+        raise HTTPException(status_code=422, detail=res.get("message", "nothing to apply"))
+    output = Path(res["output_path"])
+    verified = res.get("verified_opens_in_excel")
+    label = f"Grid Namer: {len(manual['named'])} named area(s) + {auto_count} automatic title op(s) · {'verified' if verified else 'unverified' if verified is None else 'FAILED TO OPEN'}"
+    version = _add_version(s, output, "grid_namer", label, res.get("applied", []), verified, res["change_log_entry"]["output_sha256"])
+    out: dict[str, Any] = {
+        "result": _apply_result(res, version["file_name"]),
+        "version": version,
+        "named": manual["named"],
+        "skipped": skipped,
+        "manual_ops": len(manual["ops"]),
+        "auto_ops": auto_count,
+    }
+    if payload.get("reanalyze", True) and res["status"] in ("APPLIED", "PARTIAL"):
+        out.update(_analyze(s, output))
+    return out
 
 
 @app.post("/api/sessions/{session_id}/reports")

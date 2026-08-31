@@ -6,6 +6,13 @@ name a human recognises, once it is in Mind?**
 
 It reproduces, step by step, the audit that produced Mind Ready **1.6.7**.
 
+> Since **1.7.0** there is also a hands-on alternative: the **Grid Namer**
+> screen (sidebar). It shows the whole workbook sheet by sheet with the
+> detected grids outlined; drag over an area, type the name you want, tick
+> flags, Submit — everything you did not touch is named by the conventions
+> this runbook audits. Use this runbook when you want the *automatic* names
+> checked; use the Grid Namer when you already know what a block is called.
+
 Why it matters: Mind lists every grid by name in the `work ▾` template selector.
 A grid with no `#Title` above it is listed as **`Untitled(60,8)`** — the row and
 column of its first cell. A grid the app could only call `Cashflows C4` is no

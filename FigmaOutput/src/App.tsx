@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import TopBar from "./components/TopBar";
@@ -10,10 +10,20 @@ import RecalculateScreen from "./screens/RecalculateScreen";
 import ReportsScreen from "./screens/ReportsScreen";
 import HistoryScreen from "./screens/HistoryScreen";
 import MindScreen from "./screens/MindScreen";
+import GridNamerScreen from "./screens/GridNamerScreen";
 import FixPanel from "./components/FixPanel";
+import { health } from "./services/api";
 
 export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+
+  // Browser tab: "MindPrep v1.7.0" -- the version comes from the running backend.
+  useEffect(() => {
+    document.title = "MindPrep";
+    health()
+      .then((h) => { document.title = `MindPrep v${h.version}`; })
+      .catch(() => {});
+  }, []);
 
   return (
     <BrowserRouter>
@@ -27,6 +37,7 @@ export default function App() {
               <Route path="/" element={<WorkbookScreen />} />
               <Route path="/findings" element={<FindingsScreen />} />
               <Route path="/prep" element={<PrepScreen />} />
+              <Route path="/grid-namer" element={<GridNamerScreen />} />
               <Route path="/assistant" element={<AssistantScreen />} />
               <Route path="/recalculate" element={<RecalculateScreen />} />
               <Route path="/reports" element={<ReportsScreen />} />

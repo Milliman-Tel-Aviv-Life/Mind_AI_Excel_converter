@@ -7,6 +7,7 @@ const navItems = [
   { to: "/", label: "Workbook", icon: "📄" },
   { to: "/findings", label: "Findings", icon: "🔍" },
   { to: "/prep", label: "Prep", icon: "⚙️" },
+  { to: "/grid-namer", label: "Grid Namer", icon: "🏷️" },
   { to: "/assistant", label: "Assistant", icon: "💬" },
   { to: "/recalculate", label: "Recalculate", icon: "▶" },
   { to: "/reports", label: "Reports", icon: "📋" },
