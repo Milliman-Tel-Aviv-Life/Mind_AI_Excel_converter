@@ -162,7 +162,14 @@ recalculate(sessionId: string): Promise<RecalcResult>
 generateReports(sessionId: string): Promise<ReportBuild>
 downloadUrl(sessionId: string, fileName: string): string
 listVersions(sessionId: string): Promise<Version[]>
+
+// 1.6.6 -- upload size gate + scan status (backend: app/web/server.py)
+uploadWorkbook(file, mode, { defer: true }): Promise<PendingUpload | SessionStart>   // POST /api/sessions defer=1: store + inspect only -> { pending: true, size: SizeInfo, version, versions, scan }
+analyzeSession(sessionId: string, ignoreSheets: string[]): Promise<SessionStart>       // POST /api/sessions/{id}/analyze { ignore_sheets } -> summary/report/plan/delta/version/versions/size/scan
+scanStatus(sessionId: string): Promise<ScanStatus>                                       // GET /api/sessions/{id}/status -> state pending|running|ready|error, stage, title, message, fraction, overall, sheet, rule_id, elapsed_s, stages[], error
 ```
+
+Upload flow since 1.6.6: upload deferred -> if `size.above_threshold` (decompressed size over `size.threshold_mb`; an .xlsb is measured unpacked) show the skip-sheets step (`size.sheets` sorted by `bytes`, with `share` bars and hidden/veryHidden badges; refuse skipping every sheet) -> `analyzeSession(id, ignore)` while polling `scanStatus` every ~0.6 s for the indicator (`src/components/ScanProgress.tsx`) -> Findings. `WorkbookSummary` gained `ignored_sheets`, `ignored_sheet_count`, `total_sheet_count`, `size`. An older backend answers the deferred upload with the full `SessionStart` (no `pending`) -- handle both.
 
 Mock fixture to include: a workbook "IFRS_Risk_Model.xlsm" with 11 sheets, 183 grids (most untitled), 3,002 formulas (103 array), `MM_LOOP ×4`; findings: 1 ERROR (FRM-002: `AGGREGATE`, `FILTER` not on the supported list, first site `MM_Change_Log!L7`), 2 NOT_SUPPORTED (FORMULA-001, READY-001), 15 WARNING (e.g. DBG-003 71 whole-column references from `Cashflows!D5`, STR-004 untitled grids, FMT-002 theme colours), 76 PASS; prep plan with the actions listed above (e.g. "Give every untitled grid one #Name title" = 160 changes, 23 skipped with reasons); one assistant conversation that ends in a 2-operation proposal (rename sheet `Top` → `Summary`; set `Data!B3` to `#Premium table /Input`) and its applied system note; three versions in History.
 

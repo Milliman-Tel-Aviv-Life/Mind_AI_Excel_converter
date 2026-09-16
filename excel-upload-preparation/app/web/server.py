@@ -53,6 +53,8 @@ from app.recalc import group_errors, recalculate  # noqa: E402
 from app.prep import _cells_of as _array_cells  # noqa: E402
 from app.prep import array_size_hint  # noqa: E402
 from app.rules_engine import RulesEngine  # noqa: E402
+from app.progress import STAGE_TITLES, overall_progress  # noqa: E402
+from app.sizing import MB, size_gate  # noqa: E402
 
 MODE_MAP = {
     "plan": ("Plan (analyze everything)", plan_mode),
@@ -96,6 +98,12 @@ class Session:
     recalc_path: Path | None = None  # the recalculated copy: freshest cell values for the workbook view
     grid_names: dict[str, str] = field(default_factory=dict)  # "Sheet!Ref" -> assistant-proposed grid name
     created_at: float = field(default_factory=time.time)
+    # 1.6.6 -- upload size gate + scan status
+    size: dict[str, Any] | None = None  # app.sizing.size_gate of the uploaded file
+    ignore_sheets: list[str] = field(default_factory=list)  # sheets the user chose not to scan
+    pending: bool = False  # uploaded and inspected, not analysed yet (deferred upload)
+    scan: dict[str, Any] = field(default_factory=dict)  # live status of the current/last scan
+    lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     @property
     def current_path(self) -> Path:
@@ -179,6 +187,9 @@ def _summary(analysis: dict[str, Any]) -> dict[str, Any]:
         "app_version": f.get("app_version"),
         "has_vba": bool(f.get("has_vba")),
         "sheet_count": f.get("sheet_count", 0),
+        "ignored_sheet_count": f.get("ignored_sheet_count", 0),
+        "total_sheet_count": f.get("total_sheet_count", f.get("sheet_count", 0)),
+        "ignored_sheets": [{"name": s["name"], "state": s["state"]} for s in wb.get("ignored_sheets", [])],
         "hidden_sheet_count": f.get("hidden_sheet_count", 0),
         "grid_count": f.get("grid_count", 0),
         "flagged_grid_count": f.get("flagged_grid_count", 0),
@@ -227,11 +238,81 @@ def _delta(previous: dict[str, Any] | None, current: dict[str, Any], version_id:
     }
 
 
-def _analyze(s: Session, path: Path) -> dict[str, Any]:
+# --- scan status (1.6.6) ------------------------------------------------------------------
+def _scan_start(s: Session, needs_convert: bool) -> None:
+    now = time.time()
+    s.scan = {
+        "state": "running",
+        "stage": None,
+        "title": "Starting",
+        "message": "Starting",
+        "fraction": None,
+        "overall": 0.0,
+        "sheet": None,
+        "rule_id": None,
+        "started_at": now,
+        "updated_at": now,
+        "finished_at": None,
+        "stage_started": now,
+        "stages": [],
+        "error": None,
+        "version_id": s.current_version_id,
+        "needs_convert": needs_convert,
+        "ignore_sheets": list(s.ignore_sheets),
+    }
+
+
+def _progress_for(s: Session):
+    def cb(stage: str, message: str, fraction: float | None = None, **facts: Any) -> None:
+        sc = s.scan
+        now = time.time()
+        if sc.get("stage") != stage:
+            if sc.get("stage"):
+                sc["stages"].append({"stage": sc["stage"], "seconds": round(now - sc["stage_started"], 2)})
+            sc["stage"], sc["stage_started"] = stage, now
+        sc.update(
+            title=STAGE_TITLES.get(stage, stage),
+            message=message,
+            fraction=fraction,
+            updated_at=now,
+            sheet=facts.get("sheet"),
+            rule_id=facts.get("rule_id"),
+        )
+        sc["overall"] = overall_progress(stage, fraction, bool(sc.get("needs_convert")))
+
+    return cb
+
+
+def _scan_finish(s: Session, error: str | None = None) -> None:
+    sc = s.scan
+    now = time.time()
+    if sc.get("stage"):
+        sc["stages"].append({"stage": sc["stage"], "seconds": round(now - sc.get("stage_started", now), 2)})
+    sc.update(state="error" if error else "ready", finished_at=now, updated_at=now, error=error, overall=sc.get("overall", 0.0) if error else 1.0)
+    sc["title"] = "Failed" if error else "Done"
+    sc["message"] = error or f"Scan finished in {now - sc.get('started_at', now):.1f} s"
+    sc["stage"] = sc.get("stage") if error else "done"
+
+
+def _scan_snapshot(s: Session) -> dict[str, Any]:
+    sc = dict(s.scan) if s.scan else {"state": "pending" if s.pending else "idle", "stage": None, "title": None, "message": None, "fraction": None, "overall": 0.0, "stages": [], "error": None}
+    now = time.time()
+    started = sc.get("started_at")
+    finished = sc.get("finished_at")
+    sc["elapsed_s"] = round(((finished or now) - started), 1) if started else 0.0
+    sc.pop("stage_started", None)
+    sc["state"] = sc.get("state") or ("pending" if s.pending else "idle")
+    sc["version_id"] = sc.get("version_id") or s.current_version_id
+    return sc
+
+
+def _analyze(s: Session, path: Path, progress=None) -> dict[str, Any]:
     label, module = MODE_MAP[s.mode]
     work = s.work_dir / "analysis" / s.current_version_id
     previous = s.result["validation_report"] if s.result else None
-    result = module.run(path, work, load_config(), engine=engine())
+    result = module.run(path, work, load_config(), engine=engine(), ignore_sheets=s.ignore_sheets or None, progress=progress)
+    if progress is not None:
+        progress("plan", "Planning the fixes", None)
     s.plan = plan_actions(result["workbook_analysis"], result["validation_report"], s.grid_names or None)
     report = result["validation_report"]
     # "Fix available" means the current prep plan has an operation for the rule.
@@ -241,7 +322,75 @@ def _analyze(s: Session, path: Path) -> dict[str, Any]:
     report["_version_id"] = s.current_version_id
     s.result = result
     delta = _delta(previous, report, s.current_version_id)
-    return {"summary": _summary(result["workbook_analysis"]), "report": {k: v for k, v in report.items() if k != "_version_id"}, "plan": s.plan, "delta": delta}
+    summary = _summary(result["workbook_analysis"])
+    summary["size"] = s.size
+    return {"summary": summary, "report": {k: v for k, v in report.items() if k != "_version_id"}, "plan": s.plan, "delta": delta}
+
+
+def _convert(s: Session, path: Path, progress) -> Path:
+    """An .xlsb is converted through Excel first (openpyxl cannot read it);
+    the converted file becomes a version of its own."""
+    target = "xlsm" if has_vba_project(path) else "xlsx"
+    progress("convert", f"Converting .xlsb to .{target} through Excel (openpyxl cannot read .xlsb)", None)
+    conv = convert_output_format(path, s.work_dir / "convert", target)
+    if conv["status"] != "APPLIED":
+        raise HTTPException(status_code=500, detail=conv.get("message", "conversion failed"))
+    out = Path(conv["output_path"])
+    _add_version(s, out, "convert", f"converted .xlsb to .{target} via Excel", [], None, conv["change_log_entry"]["output_sha256"])
+    return out
+
+
+def _run_scan(s: Session, path: Path | None = None) -> dict[str, Any]:
+    """One scan of `path` (default: the current version) with the session's
+    ignore list, converting an .xlsb first, reporting every stage into
+    `s.scan` (GET /status) -- one at a time per session."""
+    if not s.lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="a scan is already running for this session")
+    try:
+        path = Path(path or s.current_path)
+        needs_convert = path.suffix.lower() == ".xlsb"
+        _scan_start(s, needs_convert)
+        progress = _progress_for(s)
+        try:
+            if needs_convert:
+                path = _convert(s, path, progress)
+            out = _analyze(s, path, progress)
+        except HTTPException as exc:
+            _scan_finish(s, error=str(exc.detail))
+            raise
+        except Exception as exc:
+            _scan_finish(s, error=f"analysis failed: {exc}")
+            raise HTTPException(status_code=500, detail=f"analysis failed: {exc}") from exc
+        _scan_finish(s)
+        s.pending = False
+        current = next((v for v in s.versions if v["id"] == s.current_version_id), s.versions[-1])
+        return {**out, "version": current, "versions": s.versions, "size": s.size, "scan": _scan_snapshot(s)}
+    finally:
+        s.lock.release()
+
+
+def _parse_ignore(s: Session, raw: Any) -> list[str]:
+    """The sheets to skip, validated against the sheet list read from the
+    package (when it could be read): unknown names are refused, and at least
+    one sheet must remain to scan."""
+    if raw in (None, ""):
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            raw = [x.strip() for x in raw.split(",") if x.strip()]
+    if not isinstance(raw, list) or not all(isinstance(x, str) for x in raw):
+        raise HTTPException(status_code=422, detail="ignore_sheets must be a list of sheet names")
+    names = list(dict.fromkeys(x for x in raw if x))
+    known = [sh["name"] for sh in (s.size or {}).get("sheets", [])]
+    if known:
+        unknown = [n for n in names if n not in known]
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"unknown sheet(s): {', '.join(unknown)}")
+        if len(names) >= len(known):
+            raise HTTPException(status_code=422, detail="at least one sheet must be scanned")
+    return names
 
 
 def _apply_result(res: dict[str, Any], output_name: str) -> dict[str, Any]:
@@ -274,11 +423,30 @@ def _validate_ops(raw_ops: Any) -> list[dict[str, Any]]:
 # --- API ----------------------------------------------------------------------------------
 @app.get("/api/health")
 def health() -> dict[str, Any]:
-    return {"version": app.version, "excel": com_available(), "assistant": llm_available(), "rules": len(engine().active_rules()), "frontend": DIST_DIR.is_dir()}
+    from app.sizing import size_threshold_bytes
+
+    return {
+        "version": app.version,
+        "excel": com_available(),
+        "assistant": llm_available(),
+        "rules": len(engine().active_rules()),
+        "frontend": DIST_DIR.is_dir(),
+        # 1.6.6: deferred upload + sheet selection + scan status are available
+        "upload_gate": True,
+        "size_threshold_mb": round(size_threshold_bytes(load_config()) / MB, 1),
+    }
 
 
 @app.post("/api/sessions")
-def create_session(file: UploadFile = File(...), mode: str = Form("plan")) -> dict[str, Any]:
+def create_session(file: UploadFile = File(...), mode: str = Form("plan"), defer: str = Form(""), ignore_sheets: str = Form("")) -> dict[str, Any]:
+    """Upload a workbook. The file is stored and *inspected* (sizes, sheet
+    list -- from the package alone, nothing is parsed) before anything else.
+
+    `defer` truthy: stop there and return `{pending: true, size}` so the
+    front-end can ask about skipping sheets when the workbook is above the
+    size threshold, then POST .../analyze. Otherwise (default; scripts and
+    older front-ends) the file is converted/analysed at once, honouring an
+    optional `ignore_sheets` JSON list."""
     if mode not in MODE_MAP:
         raise HTTPException(status_code=422, detail=f"unknown mode {mode}")
     name = Path(file.filename or "workbook.xlsx").name
@@ -297,19 +465,30 @@ def create_session(file: UploadFile = File(...), mode: str = Form("plan")) -> di
     from app.inventory import sha256_of
 
     version = _add_version(s, raw_path, "upload", "original upload", [], None, sha256_of(raw_path))
-    source_path = raw_path
-    if raw_path.suffix.lower() == ".xlsb":
-        target = "xlsm" if has_vba_project(raw_path) else "xlsx"
-        conv = convert_output_format(raw_path, work_dir / "convert", target)
-        if conv["status"] != "APPLIED":
-            raise HTTPException(status_code=500, detail=conv.get("message", "conversion failed"))
-        source_path = Path(conv["output_path"])
-        version = _add_version(s, source_path, "convert", f"converted .xlsb to .{target} via Excel", [], None, conv["change_log_entry"]["output_sha256"])
-    try:
-        analysed = _analyze(s, source_path)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"analysis failed: {exc}") from exc
-    return {"sessionId": sid, **analysed, "version": version}
+    s.size = size_gate(raw_path, load_config())
+    s.ignore_sheets = _parse_ignore(s, ignore_sheets)
+    if str(defer).strip().lower() in ("1", "true", "yes", "on"):
+        s.pending = True
+        return {"sessionId": sid, "pending": True, "mode": mode, "size": s.size, "version": version, "versions": s.versions, "scan": _scan_snapshot(s)}
+    return {"sessionId": sid, **_run_scan(s, raw_path)}
+
+
+@app.post("/api/sessions/{session_id}/analyze")
+def analyze(session_id: str, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    """Scan a deferred upload (or scan the current version again) with the
+    given `ignore_sheets`. Long call: poll GET .../status meanwhile."""
+    s = _session(session_id)
+    if "ignore_sheets" in payload:
+        s.ignore_sheets = _parse_ignore(s, payload.get("ignore_sheets"))
+    return {"sessionId": s.id, **_run_scan(s)}
+
+
+@app.get("/api/sessions/{session_id}/status")
+def scan_status(session_id: str) -> dict[str, Any]:
+    """Where the current (or last) scan is: state pending|running|ready|error,
+    stage + title + message, in-stage fraction, overall progress, the sheet
+    or rule being worked on, elapsed seconds, per-stage timings."""
+    return _scan_snapshot(_session(session_id))
 
 
 @app.post("/api/sessions/{session_id}/reanalyze")
@@ -319,7 +498,7 @@ def reanalyze(session_id: str, payload: dict[str, Any] = Body(default={})) -> di
     if vid not in s.paths:
         raise HTTPException(status_code=404, detail=f"unknown version {vid}")
     s.current_version_id = vid
-    return {**_analyze(s, s.paths[vid]), "versions": s.versions}
+    return _run_scan(s, s.paths[vid])
 
 
 @app.post("/api/sessions/{session_id}/apply")
@@ -338,7 +517,7 @@ def apply(session_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any
     version = _add_version(s, output, source, label, res.get("applied", []), verified, res["change_log_entry"]["output_sha256"])
     out: dict[str, Any] = {"result": _apply_result(res, version["file_name"]), "version": version}
     if payload.get("reanalyze", True) and res["status"] in ("APPLIED", "PARTIAL"):
-        out.update(_analyze(s, output))
+        out.update(_run_scan(s, output))
     return out
 
 
@@ -731,7 +910,7 @@ def grid_namer(session_id: str, payload: dict[str, Any] = Body(...)) -> dict[str
         "auto_ops": auto_count,
     }
     if payload.get("reanalyze", True) and res["status"] in ("APPLIED", "PARTIAL"):
-        out.update(_analyze(s, output))
+        out.update(_run_scan(s, output))
     return out
 
 

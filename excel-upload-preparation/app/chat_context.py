@@ -103,6 +103,12 @@ def build_context_pack(analysis: dict[str, Any], validation_report: dict[str, An
         lines.append(f"- Package parts only Excel can preserve (data model / customXml / ...): {len(f['non_openpyxl_parts'])}")
 
     lines.append("\n# Sheets and grids (grid = 'name (range) [flags] headers'; 'untitled X' = no '#' title cell)")
+    if wb.get("ignored_sheets"):
+        lines.append(
+            "NOT SCANNED (the user chose to skip these sheets: they exist in the file but nothing on them was read or checked; "
+            "say so if asked about them, and never propose changes on them): "
+            + ", ".join(f"{s['name']} ({s['state']})" for s in wb["ignored_sheets"])
+        )
     for s in wb["sheets"]:
         lines.append(f"## {s['name']} -- state {s['state']}, used range {s.get('dimensions')}, {len(s['grids'])} grid(s), {s.get('formula_count', 0)} formula(s), {len(s.get('standalone_text_cells', []))} standalone text cell(s)")
         for g in s["grids"][:MAX_GRIDS_PER_SHEET]:

@@ -29,9 +29,10 @@ import re
 import shutil
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable
 
 import openpyxl
+from openpyxl.reader.excel import ExcelReader
 from openpyxl.styles.numbers import is_date_format
 from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
 
@@ -43,6 +44,78 @@ MAX_STYLE_SAMPLES = 25
 MAX_STYLE_CELL_REFS = 5000  # coordinates kept per sheet for app/prep.py actions
 
 _WORKBOOK_CACHE: dict[str, Any] = {}
+
+# A progress callback: progress(stage, message, fraction_within_stage_or_None, **facts).
+# Stages, in order: copy, load, inventory, names, rules, plan (the web server
+# turns them into one status the front-end polls). Any exception a callback
+# raises is the caller's problem -- the scanner never swallows it.
+ProgressFn = Callable[..., None]
+
+
+def _notify(progress: ProgressFn | None, stage: str, message: str, fraction: float | None = None, **facts: Any) -> None:
+    if progress is not None:
+        progress(stage, message, fraction, **facts)
+
+
+class _SelectiveReader(ExcelReader):
+    """openpyxl's reader, except that the sheets in `ignore` are never parsed:
+    they come back as empty placeholder sheets at their original position
+    (so sheet indexes, sheet-scoped defined names and the active-sheet index
+    stay right) with their real name and visibility. Everything else --
+    strings, styles, names, VBA, the other sheets -- is read exactly as
+    openpyxl would. Also the hook for per-sheet load progress: openpyxl
+    parses one sheet at a time and the workbook part has told us how many."""
+
+    def __init__(self, fn, ignore: set[str], progress: ProgressFn | None, **kwargs):
+        super().__init__(fn, **kwargs)
+        self._ignore = ignore
+        self._progress = progress
+
+    def read_worksheets(self):
+        parser = self.parser
+        original = parser.find_sheets
+        skipped: list[tuple[int, Any]] = []
+
+        def filtered():
+            sheets = list(original())
+            total = len(sheets)
+            for i, (sheet, rel) in enumerate(sheets):
+                if sheet.name in self._ignore:
+                    skipped.append((i, sheet))
+                    _notify(self._progress, "load", f"Skipping sheet {i + 1}/{total}: {sheet.name}", i / total, sheet=sheet.name, skipped=True)
+                    continue
+                _notify(self._progress, "load", f"Reading sheet {i + 1}/{total}: {sheet.name}", i / total, sheet=sheet.name)
+                yield sheet, rel
+
+        parser.find_sheets = filtered
+        try:
+            super().read_worksheets()
+        finally:
+            parser.find_sheets = original
+        for i, sheet in skipped:  # ascending index order keeps every position right
+            ws = self.wb.create_sheet(sheet.name, index=i)
+            ws.sheet_state = sheet.state
+            ws.mind_ready_ignored = True
+
+
+def load_workbook_selective(path: str | Path, ignore_sheets: Iterable[str] = (), data_only: bool = False, keep_vba: bool = False, progress: ProgressFn | None = None):
+    """openpyxl.load_workbook that does not parse the sheets in `ignore_sheets`
+    (they are present, but empty). With nothing to ignore and no progress
+    hook it is exactly openpyxl.load_workbook."""
+    ignore = {str(n) for n in ignore_sheets or ()}
+    if not ignore and progress is None:
+        return openpyxl.load_workbook(str(path), data_only=data_only, keep_vba=keep_vba)
+    reader = _SelectiveReader(str(path), ignore, progress, read_only=False, keep_vba=keep_vba, data_only=data_only, keep_links=True, rich_text=False)
+    reader.read()
+    return reader.wb
+
+
+def ignored_sheet_names(analysis: dict[str, Any], workbook_index: int = 0) -> list[str]:
+    """The sheets the user asked the scan to skip (none for an ordinary analysis)."""
+    try:
+        return [s["name"] for s in analysis["workbooks"][workbook_index].get("ignored_sheets", [])]
+    except (KeyError, IndexError, TypeError):
+        return []
 
 
 def sha256_of(path: Path) -> str:
@@ -100,7 +173,7 @@ def open_cached(analysis: dict[str, Any], workbook_index: int = 0):
     copy_path = analysis["workbooks"][workbook_index]["copy_path"]
     wb = _WORKBOOK_CACHE.get(copy_path)
     if wb is None:
-        wb = openpyxl.load_workbook(copy_path, data_only=False)
+        wb = load_workbook_selective(copy_path, ignored_sheet_names(analysis, workbook_index), data_only=False)
         _WORKBOOK_CACHE[copy_path] = wb
     return wb
 
@@ -115,13 +188,16 @@ def cell_value(analysis: dict[str, Any], sheet: str, row: int, col: int) -> Any:
 _VALUES_CACHE: dict[str, Any] = {}
 
 
-def _values_workbook(path: str):
+def _values_workbook(path: str, ignore_sheets: Iterable[str] = ()):
     """A data_only (cached values) view of a workbook, cached per path -- the
-    values Excel last stored, i.e. what the user sees in the cells."""
-    wb = _VALUES_CACHE.get(path)
+    values Excel last stored, i.e. what the user sees in the cells. Sheets the
+    analysis skipped are skipped here too (they would cost the same again)."""
+    ignore = tuple(sorted({str(n) for n in ignore_sheets or ()}))
+    key = f"{path}|{'|'.join(ignore)}" if ignore else path
+    wb = _VALUES_CACHE.get(key)
     if wb is None:
-        wb = openpyxl.load_workbook(path, data_only=True, read_only=False)
-        _VALUES_CACHE[path] = wb
+        wb = load_workbook_selective(path, ignore, data_only=True)
+        _VALUES_CACHE[key] = wb
     return wb
 
 
@@ -163,7 +239,7 @@ def cell_window(analysis: dict[str, Any], sheet: str, cell: str, rows: int = 3, 
     for candidate, label in ((values_path, "recalculation"), (copy_path, "analysis copy")):
         if candidate and Path(candidate).is_file():
             try:
-                wb_v = _values_workbook(str(candidate))
+                wb_v = _values_workbook(str(candidate), ignored_sheet_names(analysis))
                 if sheet in wb_v.sheetnames:
                     ws_v, values_from = wb_v[sheet], label
                     break
@@ -433,11 +509,25 @@ def _sheet_inventory(ws) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str
     return sheet_entry, formulas, function_usage
 
 
-def build_analysis(source_path: Path, work_dir: Path, analysis_id: str) -> dict[str, Any]:
+def build_analysis(
+    source_path: Path,
+    work_dir: Path,
+    analysis_id: str,
+    ignore_sheets: Iterable[str] | None = None,
+    progress: ProgressFn | None = None,
+) -> dict[str, Any]:
+    """The inventory of one workbook. `ignore_sheets` names sheets the user
+    chose not to scan (a large-workbook option): they are neither parsed nor
+    inventoried, appear under `workbooks[0].ignored_sheets` (name + state)
+    and nowhere else, and are counted in `features.ignored_sheet_count`.
+    `progress` receives the stages (see ProgressFn)."""
+    ignore = {str(n) for n in ignore_sheets or ()}
+    _notify(progress, "copy", "Copying the workbook (the original is never modified)", None)
     copy_path, source_sha256 = make_immutable_copy(source_path, work_dir)
     suffix = copy_path.suffix.lower().lstrip(".")
 
-    wb = openpyxl.load_workbook(copy_path, data_only=False)
+    _notify(progress, "load", "Opening the workbook", 0.0)
+    wb = load_workbook_selective(copy_path, ignore, data_only=False, progress=progress)
 
     with zipfile.ZipFile(copy_path) as zf:
         names_in_package = set(zf.namelist())
@@ -447,12 +537,18 @@ def build_analysis(source_path: Path, work_dir: Path, analysis_id: str) -> dict[
     has_vba = "xl/vbaProject.bin" in names_in_package or suffix in ("xlsm", "xlsb")
 
     sheets: list[dict[str, Any]] = []
+    ignored_sheets: list[dict[str, Any]] = []
     formulas: list[dict[str, Any]] = []
     function_usage: dict[str, int] = {}
     hidden_sheet_count = 0
     prefix_counts: dict[str, int] = {}
 
-    for ws in wb.worksheets:
+    all_sheets = list(wb.worksheets)
+    for i, ws in enumerate(all_sheets):
+        if ws.title in ignore:
+            ignored_sheets.append({"name": ws.title, "state": ws.sheet_state, "index": i})
+            continue
+        _notify(progress, "inventory", f"Scanning sheet {i + 1}/{len(all_sheets)}: {ws.title}", i / max(1, len(all_sheets)), sheet=ws.title)
         sheet_entry, sheet_formulas, sheet_usage = _sheet_inventory(ws)
         sheets.append(sheet_entry)
         formulas.extend(sheet_formulas)
@@ -463,6 +559,7 @@ def build_analysis(source_path: Path, work_dir: Path, analysis_id: str) -> dict[
         if sheet_entry["state"] != "visible":
             hidden_sheet_count += 1
 
+    _notify(progress, "names", "Reading defined names and package parts", None)
     defined_names = []
     if hasattr(wb.defined_names, "values"):
         for dn in wb.defined_names.values():
@@ -485,6 +582,8 @@ def build_analysis(source_path: Path, work_dir: Path, analysis_id: str) -> dict[
 
     features = {
         "sheet_count": len(sheets),
+        "ignored_sheet_count": len(ignored_sheets),
+        "total_sheet_count": len(all_sheets),
         "hidden_sheet_count": hidden_sheet_count,
         "has_vba": has_vba,
         "vba_project_bytes": vba_size,
@@ -518,6 +617,14 @@ def build_analysis(source_path: Path, work_dir: Path, analysis_id: str) -> dict[
                 "message": f"{len(special_parts)} package part(s) (data model / customXml / pivot caches / controls) that a pure-Python save would drop; outputs must be written by Excel.",
             }
         )
+    if ignored_sheets:
+        risks.append(
+            {
+                "type": "SHEETS_IGNORED",
+                "message": f"{len(ignored_sheets)} sheet(s) skipped at the user's request and not checked by any rule: "
+                + ", ".join(s["name"] for s in ignored_sheets),
+            }
+        )
 
     workbook_entry = {
         "path": str(source_path),
@@ -526,6 +633,7 @@ def build_analysis(source_path: Path, work_dir: Path, analysis_id: str) -> dict[
         "file_type": suffix,
         "source_sha256": source_sha256,
         "sheets": sheets,
+        "ignored_sheets": ignored_sheets,
         "defined_names": defined_names,
         "formulas": formulas,
         "has_vba": has_vba,

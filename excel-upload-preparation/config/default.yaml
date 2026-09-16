@@ -1,4 +1,4 @@
-package_version: 1.6.6
+package_version: 1.7.1
 rule_set_version: 1.2.0
 default_mode: PLAN_MODE
 copy_only: true
@@ -9,3 +9,8 @@ multiple_workbook_context:
   reserved: true
 # DBG-003: ranges above this many cells (or whole columns/rows) are flagged
 large_range_cells: 50000
+# Upload size gate (1.6.6): a workbook whose DECOMPRESSED size (the zip
+# package unpacked -- the honest measure for an .xlsb) is above this many MB
+# makes the app ask whether some sheets should be skipped before it scans.
+# Env override: MIND_READY_SIZE_THRESHOLD_MB.
+upload_size_threshold_mb: 25

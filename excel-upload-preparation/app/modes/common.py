@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..inventory import build_analysis
 from ..models import Mode, ProcessingResult, Status
@@ -38,19 +38,30 @@ def run_mode(
     config: dict[str, Any],
     categories: list[str] | None,
     engine: RulesEngine | None = None,
+    ignore_sheets: list[str] | None = None,
+    progress: Callable[..., None] | None = None,
 ) -> dict[str, Any]:
-    """categories=None means 'all active rules' (used by PLAN_MODE)."""
+    """categories=None means 'all active rules' (used by PLAN_MODE).
+    `ignore_sheets`: sheets the user chose not to scan (large workbooks).
+    `progress(stage, message, fraction, **facts)`: status callback -- the
+    inventory stages first, then one call per rule, then 'report'."""
     engine = engine or RulesEngine()
     request_id = str(uuid.uuid4())
 
-    analysis = build_analysis(source_path, work_dir, analysis_id=request_id)
+    analysis = build_analysis(source_path, work_dir, analysis_id=request_id, ignore_sheets=ignore_sheets, progress=progress)
 
     if categories is None:
         rules = engine.active_rules()
     else:
         rules = [r for r in engine.active_rules() if r["category"] in categories]
 
-    findings = [run_rule(rule, analysis, config) for rule in rules]
+    findings = []
+    for i, rule in enumerate(rules):
+        if progress is not None:
+            progress("rules", f"Checking rule {i + 1}/{len(rules)}: {rule['id']}", i / max(1, len(rules)), rule_id=rule["id"])
+        findings.append(run_rule(rule, analysis, config))
+    if progress is not None:
+        progress("report", "Building the report", None)
     validation_report = build_validation_report(findings)
 
     questions = [

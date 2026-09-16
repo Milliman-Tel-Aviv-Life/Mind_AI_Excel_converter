@@ -1,6 +1,7 @@
 import { useStore } from "../store";
 import StatusPill from "./StatusPill";
 import VersionChip from "./VersionChip";
+import ScanProgress, { useScanStatus } from "./ScanProgress";
 import * as api from "../services/api";
 
 export default function TopBar() {
@@ -11,6 +12,8 @@ export default function TopBar() {
   const applyAnalysis = useStore((s) => s.applyAnalysis);
   const setIsAnalyzing = useStore((s) => s.setIsAnalyzing);
   const isAnalyzing = useStore((s) => s.isAnalyzing);
+  // 1.6.6: the re-analysis shows the backend's live stage (sheet / rule being worked on)
+  const scan = useScanStatus(sessionId, isAnalyzing);
 
   async function handleReanalyze() {
     if (!sessionId || !currentVersion) return;
@@ -35,7 +38,8 @@ export default function TopBar() {
           </span>
           {currentVersion && <VersionChip version={currentVersion} />}
           {report && <StatusPill status={report.status} />}
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-3">
+            {isAnalyzing && scan && scan.state === "running" && <ScanProgress status={scan} compact />}
             <button
               onClick={handleReanalyze}
               disabled={isAnalyzing}

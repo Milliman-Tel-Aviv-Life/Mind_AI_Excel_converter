@@ -53,7 +53,7 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
           </svg>
         </button>
       </div>
-      <nav className="flex flex-col gap-0.5 p-2 flex-1">
+      <nav className="flex flex-col gap-0.5 p-2 flex-1 min-h-0 overflow-y-auto">
         {navItems.map(({ to, label, icon }) => (
           <NavLink
             key={to}
@@ -93,11 +93,13 @@ export default function Sidebar({ collapsed, onToggle }: Props) {
           {!collapsed && <div className="text-[10px] text-white/30 mt-1 truncate font-mono" title={latest.file_name}>{latest.file_name}</div>}
         </div>
       )}
-      {!collapsed && (
-        <div className="px-3 py-3 border-t border-white/10 text-[11px] text-white/30 font-mono">
-          {hp ? `v${hp.version} · ${hp.rules} rules` : "Excel-verified outputs"}
-        </div>
-      )}
+      {/* App release (from /api/health) -- always visible, bottom-left, grey */}
+      <div
+        className={`mt-auto shrink-0 border-t border-white/10 font-mono text-[#9CA3AF] ${collapsed ? "px-1 py-2 text-[10px] text-center" : "px-3 py-3 text-[11px]"}`}
+        title={hp ? `Excel Upload Preparation v${hp.version} · ${hp.rules} rules` : undefined}
+      >
+        {collapsed ? (hp ? `v${hp.version}` : "…") : hp ? `v${hp.version} · ${hp.rules} rules` : "Excel-verified outputs"}
+      </div>
       {!collapsed && report && (
         <div className="px-3 pb-3">
           <div className={`rounded-md px-2 py-1.5 text-xs font-mono font-semibold text-center ${

@@ -295,11 +295,11 @@ def totals_reconcile(rule, analysis: dict[str, Any], config: dict[str, Any]) -> 
     the sum of its addends' cached values -- the numbers do not reconcile (a stale value
     or a total overridden by a hard-coded number). Report-only; never changes numbers."""
     from ..formula_utils import parse_ref
-    from ..inventory import _values_workbook
+    from ..inventory import _values_workbook, ignored_sheet_names
 
     wb0 = analysis["workbooks"][0]
     try:
-        vals = _values_workbook(wb0["copy_path"])
+        vals = _values_workbook(wb0["copy_path"], ignored_sheet_names(analysis))
     except Exception:
         vals = None
     if vals is None:

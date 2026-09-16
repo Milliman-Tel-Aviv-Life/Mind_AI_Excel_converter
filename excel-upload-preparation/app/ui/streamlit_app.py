@@ -30,6 +30,8 @@ from app.excel_report import build_report_workbook, build_standalone_report  # n
 from app.inventory import has_vba_project  # noqa: E402
 from app.llm import extract_formula, llm_available, suggest_formula_fix  # noqa: E402
 from app.modes import fix_incompatible_formulas, plan_mode, prep_mind_loops, structure_fix  # noqa: E402
+from app.progress import STAGE_TITLES, overall_progress  # noqa: E402
+from app.sizing import MB, size_gate  # noqa: E402
 from app.prep import apply_operations, formula_replacement_op, plan_actions  # noqa: E402
 from app.recalc import recalculate  # noqa: E402
 from app.rules_engine import RulesEngine  # noqa: E402
@@ -135,12 +137,21 @@ def _location_text(location: dict) -> str:
     return ", ".join(f"{k}={v}" for k, v in location.items())
 
 
-def run_analysis(source_path: Path, mode_key: str) -> None:
+def run_analysis(source_path: Path, mode_key: str, ignore_sheets: list[str] | None = None) -> None:
     config = load_config()
     engine = get_engine()
     module = MODES[mode_key]
-    with st.spinner(f"Running {mode_key}..."):
-        result = module.run(source_path, get_work_dir() / "analysis", config, engine=engine)
+    # 1.6.6: a live status indicator -- stage, sheet or rule being worked on, overall progress
+    with st.status(f"Running {mode_key}...", expanded=True) as status:
+        bar = st.progress(0.0, text="Starting")
+
+        def progress(stage: str, message: str, fraction: float | None = None, **facts) -> None:
+            bar.progress(overall_progress(stage, fraction, False), text=f"{STAGE_TITLES.get(stage, stage)} - {message}")
+
+        result = module.run(source_path, get_work_dir() / "analysis", config, engine=engine, ignore_sheets=ignore_sheets or None, progress=progress)
+        bar.progress(1.0, text="Done")
+        skipped = f" ({len(ignore_sheets)} sheet(s) skipped)" if ignore_sheets else ""
+        status.update(label=f"{mode_key}: done{skipped}", state="complete", expanded=False)
     st.session_state.result = result
     st.session_state.analyzed_path = source_path
     st.session_state.last_mode_key = mode_key
@@ -160,6 +171,31 @@ def render_sidebar() -> None:
         st.markdown('<div class="eup-title">Excel Upload Preparation</div><div class="eup-subtitle">Milliman Mind readiness</div>', unsafe_allow_html=True)
         uploaded = st.file_uploader("Workbook", type=["xlsx", "xlsm", "xlsb"], help="Your original file is never modified; every step runs on a fresh copy.")
         mode_key = st.selectbox("Analysis mode", list(MODES))
+        # 1.6.6: size gate -- above the (decompressed) threshold, offer to skip sheets before scanning
+        ignore_sheets: list[str] = []
+        if uploaded is not None:
+            gate_key = (uploaded.name, uploaded.size)
+            if st.session_state.get("gate_key") != gate_key:
+                gate_path = get_work_dir() / "gate" / uploaded.name
+                gate_path.parent.mkdir(parents=True, exist_ok=True)
+                gate_path.write_bytes(uploaded.getvalue())
+                st.session_state.gate_key = gate_key
+                st.session_state.gate = size_gate(gate_path, load_config())
+            gate = st.session_state.gate
+            if gate["above_threshold"]:
+                st.warning(gate["message"])
+                names = [sh["name"] for sh in gate["sheets"]]
+                sizes = {sh["name"]: sh["bytes"] for sh in gate["sheets"]}
+                if names:
+                    ignore_sheets = st.multiselect(
+                        "Sheets to skip (optional)",
+                        names,
+                        format_func=lambda n: f"{n} · {sizes.get(n, 0) / MB:.1f} MB",
+                        help="Skipped sheets are not read or checked by any rule; they stay in the file untouched.",
+                    )
+                    if len(ignore_sheets) >= len(names):
+                        st.error("At least one sheet must be scanned.")
+                        ignore_sheets = []
         if st.button("Run analysis", type="primary", use_container_width=True, disabled=uploaded is None):
             work_dir = get_work_dir()
             raw_path = work_dir / uploaded.name
@@ -175,7 +211,7 @@ def render_sidebar() -> None:
                 source_path = conv["output_path"]
                 st.success(f"Converted to {source_path.name}")
             st.session_state.chat_history = []
-            run_analysis(source_path, mode_key)
+            run_analysis(source_path, mode_key, ignore_sheets)
 
         if "result" in st.session_state:
             st.divider()

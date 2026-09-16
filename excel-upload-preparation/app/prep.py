@@ -1154,6 +1154,8 @@ def validate_proposal(proposal: Any, analysis: dict[str, Any]) -> tuple[list[dic
     if not isinstance(proposal, dict) or not isinstance(proposal.get("operations"), list):
         return [], ["proposal must be an object with an 'operations' list"]
     sheets = {s["name"].lower(): s["name"] for s in analysis["workbooks"][0]["sheets"]}
+    # sheets the scan skipped still exist in the file: a rename must not collide with them
+    ignored_names = {s["name"].lower(): s["name"] for s in analysis["workbooks"][0].get("ignored_sheets", [])}
     summary = str(proposal.get("summary") or "assistant change")[:200]
     for i, raw in enumerate(proposal["operations"], start=1):
         if not isinstance(raw, dict):
@@ -1222,7 +1224,7 @@ def validate_proposal(proposal: Any, analysis: dict[str, Any]) -> tuple[list[dic
                 new_name = str(raw.get("new_name", "")).strip()
                 if not new_name or len(new_name) > EXCEL_SHEET_NAME_MAX or BAD_SHEET_CHARS & set(new_name):
                     raise ValueError("new_name must be 1-31 characters without []:*?/\\")
-                if new_name.lower() in sheets and new_name != sheet:
+                if (new_name.lower() in sheets or new_name.lower() in ignored_names) and new_name != sheet:
                     raise ValueError(f"a sheet named '{new_name}' already exists")
                 ops.append({**base, "op": "rename_sheet", "before": sheet, "after": new_name})
             elif op == "insert_row":

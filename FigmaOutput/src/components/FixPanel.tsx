@@ -4,6 +4,7 @@ import * as api from "../services/api";
 import type { CellWindow, ChatMessage, Finding, FixTarget, Operation, Proposal } from "../types";
 import StatusPill from "./StatusPill";
 import OperationsTable from "./OperationsTable";
+import ChatMarkdown from "./ChatMarkdown";
 
 interface Site { sheet: string; cell: string; detail: string }
 
@@ -44,6 +45,17 @@ export function extractSites(observed: unknown, depth = 0): Site[] {
   };
   walk(observed, depth);
   return out.slice(0, 40);
+}
+
+interface SiteBlock { sheet: string; range: string; cells: number; formula?: string }
+
+/** `observed.site_ranges` (same-formula blocks) when a finding provides it. */
+export function extractBlocks(observed: unknown): SiteBlock[] {
+  const raw = (observed as { site_ranges?: unknown } | null | undefined)?.site_ranges;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (b): b is SiteBlock => typeof b === "object" && b != null && typeof (b as SiteBlock).sheet === "string" && typeof (b as SiteBlock).range === "string" && typeof (b as SiteBlock).cells === "number"
+  );
 }
 
 const ERROR_MEANING: Record<string, string> = {
@@ -184,6 +196,12 @@ export default function FixPanel() {
     [report, target, isRecalcAny]
   );
   const sites = useMemo(() => (finding ? extractSites(finding.observed) : []), [finding]);
+  // Same-formula blocks (FRM-002 site_ranges): every affected cell, grouped so one range op can fix each block.
+  const blocks = useMemo(() => extractBlocks(finding?.observed), [finding]);
+  const blockTotal = useMemo(() => {
+    const o = finding?.observed as { total_call_sites?: unknown } | undefined;
+    return typeof o?.total_call_sites === "number" ? o.total_call_sites : null;
+  }, [finding]);
   // Cells this panel is about: the group's cells, or the single cell.
   const targetCells = useMemo(() => {
     if (!target) return [] as { sheet: string; cell: string; formula?: string; error?: string; array?: string }[];
@@ -460,9 +478,33 @@ export default function FixPanel() {
           </div>
         )}
 
+        {blocks.length > 0 && (
+          <div>
+            <div className="text-[11px] font-semibold text-[#9CA3AF] tracking-wider mb-1.5">
+              BLOCKS ({blocks.length}{blockTotal != null ? ` · ${blockTotal} cells` : ""})
+            </div>
+            <div className="flex flex-col gap-1 max-h-40 overflow-auto">
+              {blocks.slice(0, 12).map((b) => (
+                <div
+                  key={`${b.sheet}!${b.range}`}
+                  onClick={() => setView({ sheet: b.sheet, cell: b.range.split(":")[0] })}
+                  className="flex gap-2 items-baseline cursor-pointer rounded px-1 -mx-1 hover:bg-[#F9FAFB]"
+                  title="Show the block's first cell in the workbook view"
+                >
+                  <code className="text-[11px] font-mono text-[#374151] bg-[#F3F4F6] px-1.5 py-0.5 rounded whitespace-nowrap">{b.sheet}!{b.range}</code>
+                  <span className="text-[11px] text-[#6B7280] whitespace-nowrap">{b.cells} cell{b.cells !== 1 ? "s" : ""}{b.cells > 1 ? ", same formula" : ""}</span>
+                  {b.formula && <span className="text-[11px] text-[#6B7280] truncate font-mono" title={b.formula}>{b.formula}</span>}
+                </div>
+              ))}
+              {blocks.length > 12 && <div className="text-[11px] text-[#9CA3AF]">… {blocks.length - 12} more block{blocks.length - 12 !== 1 ? "s" : ""}</div>}
+            </div>
+            <p className="text-[11px] text-[#6B7280] mt-1">Each block shares one formula pattern — the assistant can fix a whole block with a single range operation.</p>
+          </div>
+        )}
+
         {sites.length > 0 && (
           <div>
-            <div className="text-[11px] font-semibold text-[#9CA3AF] tracking-wider mb-1.5">SITES ({sites.length})</div>
+            <div className="text-[11px] font-semibold text-[#9CA3AF] tracking-wider mb-1.5">SITES ({sites.length}{blockTotal != null && blockTotal > sites.length ? ` of ${blockTotal}` : ""})</div>
             <div className="flex flex-col gap-1 max-h-40 overflow-auto">
               {sites.map((s) => (
                 <div
@@ -554,11 +596,11 @@ export default function FixPanel() {
             {messages.map((m, i) => (
               <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-[92%] rounded-xl px-3 py-2 text-[12px] leading-relaxed whitespace-pre-wrap ${
+                  className={`max-w-[92%] rounded-xl px-3 py-2 text-[12px] leading-relaxed ${
                     m.role === "user" ? "bg-[#1F3A5F] text-white" : "bg-[#F9FAFB] border border-[#E5E7EB] text-[#374151]"
                   }`}
                 >
-                  {m.content}
+                  <ChatMarkdown content={m.content} />
                 </div>
               </div>
             ))}

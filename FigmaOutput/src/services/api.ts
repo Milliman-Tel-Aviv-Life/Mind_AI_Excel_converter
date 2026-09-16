@@ -1,4 +1,4 @@
-import type { ApplyResult, CellWindow, ChatMessage, ChatReply, Delta, FixTarget, Mode, Operation, PrepAction, RecalcResult, ReportBuild, ValidationReport, Version, WorkbookSummary } from "../types";
+import type { ApplyResult, CellWindow, ChatMessage, ChatReply, Delta, FixTarget, Mode, Operation, PrepAction, RecalcResult, ReportBuild, ScanStatus, SizeInfo, ValidationReport, Version, WorkbookSummary } from "../types";
 
 import workbookMock from "../mocks/workbook.json";
 import reportMock from "../mocks/report.json";
@@ -52,6 +52,30 @@ export interface SessionStart {
   report: ValidationReport;
   plan: PrepAction[];
   version: Version;
+  /** 1.6.6 backends also return the whole lineage, the size facts and the finished scan status. */
+  versions?: Version[];
+  size?: SizeInfo | null;
+  scan?: ScanStatus;
+  pending?: false;
+}
+
+/**
+ * A deferred upload (1.6.6): the file is stored and inspected -- sizes and the
+ * sheet list, read from the package alone -- but not scanned yet. Call
+ * analyzeSession() with the sheets to skip (if any) to run the scan.
+ */
+export interface PendingUpload {
+  sessionId: string;
+  pending: true;
+  mode: Mode;
+  size: SizeInfo;
+  version: Version;
+  versions: Version[];
+  scan: ScanStatus;
+}
+
+export function isPending(r: SessionStart | PendingUpload): r is PendingUpload {
+  return (r as PendingUpload).pending === true;
 }
 
 /** A fresh analysis of the current version, with what changed since the previous one. */
@@ -69,7 +93,14 @@ export interface ApplyOutcome extends Partial<Reanalysis> {
   version: Version;
 }
 
-export async function uploadWorkbook(file: File, mode: Mode): Promise<SessionStart> {
+export interface UploadOptions {
+  /** Store + inspect only; the scan runs on analyzeSession(). An older backend ignores the flag and scans at once. */
+  defer?: boolean;
+  /** Sheets not to scan (non-deferred upload). */
+  ignoreSheets?: string[];
+}
+
+export async function uploadWorkbook(file: File, mode: Mode, options: UploadOptions = {}): Promise<SessionStart | PendingUpload> {
   if (USE_MOCKS) {
     await delay(3500);
     return {
@@ -83,8 +114,37 @@ export async function uploadWorkbook(file: File, mode: Mode): Promise<SessionSta
   const form = new FormData();
   form.append("file", file, file.name);
   form.append("mode", mode);
+  if (options.defer) form.append("defer", "1");
+  if (options.ignoreSheets && options.ignoreSheets.length) form.append("ignore_sheets", JSON.stringify(options.ignoreSheets));
   const res = await fetch(`${API}/sessions`, { method: "POST", body: form });
-  return unwrap<SessionStart>(res);
+  return unwrap<SessionStart | PendingUpload>(res);
+}
+
+/**
+ * Scan a deferred upload (or scan the current version again) skipping
+ * `ignoreSheets`. A long call: poll scanStatus() meanwhile for the indicator.
+ */
+export async function analyzeSession(sessionId: string, ignoreSheets: string[] = []): Promise<SessionStart> {
+  if (USE_MOCKS) {
+    await delay(3000);
+    return {
+      sessionId,
+      summary: cast<WorkbookSummary>(workbookMock),
+      report: cast<ValidationReport>(reportMock),
+      plan: cast<PrepAction[]>(planMock),
+      version: cast<Version[]>(versionsMock)[0],
+    };
+  }
+  return post<SessionStart>(`/sessions/${encodeURIComponent(sessionId)}/analyze`, { ignore_sheets: ignoreSheets });
+}
+
+/** Where the current (or last) scan of a session is. Older backends answer 404 -- callers treat that as "no status". */
+export async function scanStatus(sessionId: string): Promise<ScanStatus> {
+  if (USE_MOCKS) {
+    await delay(150);
+    return { state: "running", stage: "load", title: "Reading the workbook", message: "Reading sheet 2/8: Cashflows", fraction: 0.25, overall: 0.3, elapsed_s: 4.2, stages: [], error: null };
+  }
+  return unwrap<ScanStatus>(await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/status`));
 }
 
 export async function reanalyze(sessionId: string, versionId: string): Promise<Reanalysis> {
@@ -398,7 +458,16 @@ export async function mindLoopStatus(sessionId: string, after = 0): Promise<Mind
   return unwrap<MindLoopStatus>(await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/mind-loop?after=${after}`));
 }
 
-export interface AppHealth { version: string; rules: number; excel: boolean; assistant: boolean; frontend: boolean }
+export interface AppHealth {
+  version: string;
+  rules: number;
+  excel: boolean;
+  assistant: boolean;
+  frontend: boolean;
+  /** 1.6.6: deferred upload + sheet selection + scan status are available */
+  upload_gate?: boolean;
+  size_threshold_mb?: number;
+}
 
 /** Live build info from the running backend (version, active rule count, capabilities). */
 export async function health(): Promise<AppHealth> {

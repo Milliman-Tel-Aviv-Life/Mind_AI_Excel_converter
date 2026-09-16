@@ -65,6 +65,61 @@ export interface SheetSummary {
   protected: boolean;
 }
 
+/** One sheet as read from the package (before any scan): name, visibility, decompressed size of its part. */
+export interface SheetPart {
+  name: string;
+  state: "visible" | "hidden" | "veryHidden";
+  index: number;
+  part: string | null;
+  bytes: number;
+  compressed_bytes: number;
+  /** share of all sheet bytes, 0..1 */
+  share: number;
+}
+
+/** Upload size gate (1.6.6): container facts read from the zip alone, and the threshold verdict. */
+export interface SizeInfo {
+  format: string;
+  file_bytes: number;
+  decompressed_bytes: number;
+  sheet_bytes: number;
+  model_bytes?: number;
+  file_mb: number;
+  decompressed_mb: number;
+  threshold_bytes: number;
+  threshold_mb: number;
+  measure: "decompressed";
+  above_threshold: boolean;
+  /** rough scan duration from the unpacked size (1.6.7) */
+  estimated_seconds?: number;
+  estimate_text?: string;
+  message: string;
+  sheets: SheetPart[];
+  largest_parts: { part: string; bytes: number }[];
+  sheet_list_source: string | null;
+  warnings: string[];
+}
+
+/** Live scan status (GET /api/sessions/{id}/status). */
+export interface ScanStatus {
+  state: "idle" | "pending" | "running" | "ready" | "error";
+  stage: string | null;
+  title: string | null;
+  message: string | null;
+  /** progress within the current stage, 0..1, or null when the stage cannot say */
+  fraction: number | null;
+  /** progress across the whole scan, 0..1 */
+  overall: number;
+  sheet?: string | null;
+  rule_id?: string | null;
+  elapsed_s: number;
+  stages: { stage: string; seconds: number }[];
+  error: string | null;
+  version_id?: string;
+  needs_convert?: boolean;
+  ignore_sheets?: string[];
+}
+
 export interface WorkbookSummary {
   file_name: string;
   file_type: "xlsx" | "xlsm";
@@ -73,6 +128,11 @@ export interface WorkbookSummary {
   app_version: string | null;
   has_vba: boolean;
   sheet_count: number;
+  /** 1.6.6: sheets the user chose to skip (present in the file, not scanned, checked by no rule) */
+  ignored_sheet_count?: number;
+  total_sheet_count?: number;
+  ignored_sheets?: { name: string; state: string }[];
+  size?: SizeInfo | null;
   hidden_sheet_count: number;
   grid_count: number;
   flagged_grid_count: number;

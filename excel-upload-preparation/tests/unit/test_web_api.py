@@ -296,3 +296,65 @@ def test_grid_names_endpoint_survives_an_unavailable_assistant(client, section_h
     monkeypatch.setattr(server, "suggest_names", lambda contexts, **kw: {"available": False, "names": {}, "message": "no secret.key found nearby"})
     out = client.post(f"/api/sessions/{body['sessionId']}/grid-names", json={}).json()
     assert out["available"] is False and out["names"] == [] and out["applied"] is False
+
+
+# --- 1.7.1: upload size gate, sheet skipping, scan status ------------------------------------
+
+
+def test_deferred_upload_reports_size_and_sheets_then_scans_without_the_skipped_ones(client, flagged_model_broken_xlsx, monkeypatch):
+    monkeypatch.setenv("MIND_READY_SIZE_THRESHOLD_MB", "0.001")  # everything is "large"
+    with flagged_model_broken_xlsx.open("rb") as f:
+        res = client.post("/api/sessions", files={"file": (flagged_model_broken_xlsx.name, f, "application/octet-stream")}, data={"mode": "plan", "defer": "1"})
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["pending"] is True and body["mode"] == "plan" and "summary" not in body
+    size = body["size"]
+    assert size["above_threshold"] is True and size["measure"] == "decompressed" and size["decompressed_bytes"] > size["file_bytes"] > 0
+    assert [s["name"] for s in size["sheets"]] == ["Model", "Settings", "Outputs"] and all(s["bytes"] > 0 for s in size["sheets"])
+    assert body["version"]["id"] == "ver-001" and body["scan"]["state"] == "pending"
+    sid = body["sessionId"]
+    assert client.get(f"/api/sessions/{sid}/status").json()["state"] == "pending"
+    # the ignore list is validated against the sheet list read from the package
+    assert client.post(f"/api/sessions/{sid}/analyze", json={"ignore_sheets": ["Nope"]}).status_code == 422
+    assert client.post(f"/api/sessions/{sid}/analyze", json={"ignore_sheets": ["Model", "Settings", "Outputs"]}).status_code == 422
+    assert client.post(f"/api/sessions/{sid}/analyze", json={"ignore_sheets": 5}).status_code == 422
+    assert client.get(f"/api/sessions/{sid}/status").json()["state"] == "pending"  # refused requests never started a scan
+    out = client.post(f"/api/sessions/{sid}/analyze", json={"ignore_sheets": ["Outputs"]})
+    assert out.status_code == 200, out.text
+    out = out.json()
+    assert set(out) >= {"sessionId", "summary", "report", "plan", "delta", "version", "versions", "size", "scan"}
+    summary = out["summary"]
+    assert [s["name"] for s in summary["sheets"]] == ["Model", "Settings"]
+    assert summary["ignored_sheets"] == [{"name": "Outputs", "state": "visible"}]
+    assert (summary["sheet_count"], summary["ignored_sheet_count"], summary["total_sheet_count"]) == (2, 1, 3)
+    assert summary["size"]["above_threshold"] is True
+    assert not any(f["location"].get("sheet") == "Outputs" for f in out["report"]["findings"])
+    assert out["report"]["summary"]["finding_count"] == 96  # every rule still runs
+    scan = client.get(f"/api/sessions/{sid}/status").json()
+    assert scan["state"] == "ready" and scan["overall"] == 1.0 and scan["error"] is None and scan["elapsed_s"] >= 0
+    assert {s["stage"] for s in scan["stages"]} >= {"copy", "load", "inventory", "names", "rules", "report", "plan"}
+    assert scan["ignore_sheets"] == ["Outputs"] and scan["needs_convert"] is False and scan["version_id"] == "ver-001"
+    assert out["scan"]["state"] == "ready"
+    # a re-analysis keeps the ignore list and is tracked the same way
+    again = client.post(f"/api/sessions/{sid}/reanalyze", json={}).json()
+    assert again["summary"]["ignored_sheet_count"] == 1 and again["scan"]["state"] == "ready" and again["version"]["id"] == "ver-001"
+    # scanning again with another list re-analyses the current version
+    swapped = client.post(f"/api/sessions/{sid}/analyze", json={"ignore_sheets": ["Settings"]}).json()
+    assert [s["name"] for s in swapped["summary"]["sheets"]] == ["Model", "Outputs"] and swapped["delta"]["previous_version_id"] == "ver-001"
+    health = client.get("/api/health").json()
+    assert health["upload_gate"] is True and health["size_threshold_mb"] == pytest.approx(0.001, abs=0.1)
+
+
+def test_one_shot_upload_carries_size_facts_and_honours_ignore_sheets(client, flagged_model_broken_xlsx, plain_grid_xlsx, monkeypatch):
+    monkeypatch.delenv("MIND_READY_SIZE_THRESHOLD_MB", raising=False)
+    body = _upload(client, plain_grid_xlsx)
+    assert "pending" not in body and body["size"]["above_threshold"] is False and body["summary"]["ignored_sheet_count"] == 0
+    assert body["scan"]["state"] == "ready" and body["summary"]["size"]["threshold_mb"] == 25.0 and body["versions"][0]["id"] == "ver-001"
+    with flagged_model_broken_xlsx.open("rb") as f:
+        res = client.post("/api/sessions", files={"file": (flagged_model_broken_xlsx.name, f, "application/octet-stream")}, data={"mode": "plan", "ignore_sheets": '["Settings"]'})
+    assert res.status_code == 200, res.text
+    out = res.json()
+    assert [s["name"] for s in out["summary"]["sheets"]] == ["Model", "Outputs"] and out["summary"]["ignored_sheets"][0]["name"] == "Settings"
+    assert client.get(f"/api/sessions/{out['sessionId']}/status").json()["ignore_sheets"] == ["Settings"]
+    with flagged_model_broken_xlsx.open("rb") as f:
+        assert client.post("/api/sessions", files={"file": ("x.xlsx", f, "application/octet-stream")}, data={"mode": "plan", "ignore_sheets": '["Nope"]'}).status_code == 422

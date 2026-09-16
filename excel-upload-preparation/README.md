@@ -22,11 +22,24 @@ Provider-neutral, Python-oriented instruction and rule package for preparing Exc
 
 `PASS`, `WARNING`, `ERROR`, `REQUIRES_USER_INPUT`, `NOT_SUPPORTED`.
 
-## Current status (1.7.0)
+## Current status (1.7.1)
 
 All 12 phases have a real implementation, and **every active rule (94 of
 94) has a real validator** -- nothing falls through to `NOT_SUPPORTED` any
 more except the two honest cases below.
+
+- **Large workbooks** (1.6.6): every upload is first inspected from the zip
+  package alone (`app/sizing.py` -- size on disk, *decompressed* size, and
+  every sheet with the unpacked size of its part; sheet names are read from
+  `xl/workbook.xml` or, for an `.xlsb`, from the binary `xl/workbook.bin`).
+  Above `upload_size_threshold_mb` (25, config/default.yaml; env
+  `MIND_READY_SIZE_THRESHOLD_MB`) the app asks whether some sheets should be
+  ignored before it scans anything; ignored sheets are never parsed
+  (`inventory.load_workbook_selective`), appear in no finding, and stay in
+  every output untouched. While a scan runs, a **status indicator** shows
+  the stage (convert / copy / read sheet i of N / scan sheet i of N / names /
+  rule i of M / report / plan), overall progress and elapsed time -- web app
+  via `GET /api/sessions/{id}/status`, Streamlit via `st.status`.
 
 - **Analysis & validation**: `app/inventory.py` (single-pass, openpyxl +
   zipfile, no execution of VBA/links) + `app/grids.py` (Mind's documented
@@ -130,7 +143,7 @@ MMForExcel installed it will only ever be `NOT_SUPPORTED`, `WARNING`, or
 `ERROR`, never a false `PASS`.
 
 Setup: `pip install -r requirements.txt`, then `python -m pytest tests/unit`
-(87 tests; the Excel-backed ones skip without Excel).
+(146 tests; the Excel-backed ones skip without Excel).
 Run the UI: `run_excel_upload_prep.bat` (or `streamlit run app/ui/streamlit_app.py`).
 
 ## Implementation note

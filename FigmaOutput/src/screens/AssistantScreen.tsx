@@ -3,6 +3,7 @@ import { useStore } from "../store";
 import * as api from "../services/api";
 import type { ChatMessage, Proposal } from "../types";
 import OperationsTable from "../components/OperationsTable";
+import ChatMarkdown from "../components/ChatMarkdown";
 
 function ProvenanceLine({ p }: { p: NonNullable<ChatMessage["provenance"]> }) {
   return (
@@ -72,13 +73,13 @@ function Bubble({ msg }: { msg: ChatMessage & { proposal?: Proposal } }) {
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div className={`max-w-[75%] ${isUser ? "order-2" : ""}`}>
         <div
-          className={`rounded-2xl px-4 py-3 text-[13px] leading-relaxed whitespace-pre-wrap ${
+          className={`rounded-2xl px-4 py-3 text-[13px] leading-relaxed ${
             isUser
               ? "bg-[#1F3A5F] text-white rounded-tr-sm"
               : "bg-white border border-[#E5E7EB] text-[#374151] rounded-tl-sm"
           }`}
         >
-          {msg.content}
+          <ChatMarkdown content={msg.content} />
         </div>
         {msg.provenance && <ProvenanceLine p={msg.provenance} />}
       </div>

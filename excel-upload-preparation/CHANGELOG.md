@@ -1,5 +1,54 @@
 # Changelog
 
+## 1.7.1
+
+### One backend again: the Shlomo copy's size gate and scan status folded into the main app
+
+The Shlomo copy (`excel-upload-preparation-shlomo`, branched at 1.6.5) had
+grown a large-workbook size gate with sheet skipping and a live scan status
+(its own "1.6.6", 2026-09-02) that the main app never received, while the
+main app went on to 1.6.7-1.7.0 (grid naming, the run-in-Mind loop, the Grid
+Namer). The shared front-end (`../FigmaOutput`) had been built against the
+union of both and so needed both sets of endpoints -- running it on the Shlomo
+copy made every **Run in Mind** click fail with `404 Not Found` on
+`POST /api/sessions/{id}/mind-loop`, before any browser was opened. This
+release merges the Shlomo copy's commit into the main app (three-way, common
+base 1.6.5), so one backend serves everything the front-end calls.
+
+- **Size gate** (`app/sizing.py`): every upload is inspected from the zip
+  package alone -- size on disk, decompressed size, every sheet with the
+  decompressed size of its part (`xl/workbook.xml`, or the BIFF12
+  `xl/workbook.bin` for an `.xlsb`). Threshold `upload_size_threshold_mb: 25`
+  in config/default.yaml, env override `MIND_READY_SIZE_THRESHOLD_MB`.
+- **Sheets the scan ignores** are never parsed (`inventory.load_workbook_selective`,
+  `build_analysis(..., ignore_sheets=)`): they come back as empty placeholders
+  at their original index, are listed under `workbooks[0].ignored_sheets` and
+  nowhere else, add a `SHEETS_IGNORED` risk, and the assistant is told not to
+  touch them.
+- **Scan progress** (`app/progress.py`): every mode's `run(...)` takes a
+  `progress(stage, message, fraction, **facts)` callback (copy, load, inventory,
+  names, rules, report, plan; convert first for an `.xlsb`).
+- **Web API**: `POST /api/sessions` takes `defer=1` and `ignore_sheets`;
+  `POST /api/sessions/{id}/analyze`; `GET /api/sessions/{id}/status`;
+  `/api/health` advertises `upload_gate` and `size_threshold_mb`. The apply,
+  reanalyze and Grid Namer re-analyses all go through the same tracked scan.
+  The 1.7.0 grid names (`s.grid_names`) still feed the plan after a tracked scan.
+- **Streamlit UI**: the same gate and an `st.status` progress block.
+- Tests: `tests/unit/test_sizing.py` and the two web-API gate tests join the
+  suite (146 total). The Shlomo copy is superseded by this release; run
+  `excel-upload-preparation\run_mind_ready_web.bat`.
+- **`scripts/run_after_login.py <workbook>`** (new): for the day the Mind
+  session has expired and nobody is at the keyboard. It opens the headed Edge
+  login window on the dedicated MindReady profile, waits (up to 24 h) for a
+  person to sign in, then uploads the workbook to the running app and drives
+  `POST /api/sessions/{id}/mind-loop` to the end, echoing every event to
+  `runs/after_login_<stamp>/run_after_login.log` and leaving `summary.txt` +
+  `loop_report.json` there. Its defaults are the "get it into Mind" ones:
+  numbers gate off (`--check-numbers` turns it on), sandbox projects kept
+  (`--delete-projects`). The Mind session (Auth0 login at
+  `login.milliman-mind.com`) lasts about a week; `python -m app.mind_client
+  check` tells you whether it is still valid.
+
 ## 1.7.0
 
 ### Grid Namer: the user draws the grid names, the conventions do the rest

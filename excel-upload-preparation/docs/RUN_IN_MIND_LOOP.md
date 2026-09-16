@@ -45,7 +45,7 @@ Two rules you should know before reading any result:
 |---|---|
 | App at 1.6.8 or later | <http://localhost:8600/api/health> → `"version":"1.6.8"` |
 | Excel installed | same endpoint → `"excel":true` (prep, and both recalculations of the numbers gate, go through it) |
-| A Mind session | `python -m app.mind_client check` → `"authenticated": true`. If not: `python -m app.mind_client login <your /init/… link>` opens Edge; sign in once; the session persists |
+| A Mind session | `python -m app.mind_client check` → `"authenticated": true`. If not: `python -m app.mind_client login <your /init/… link>` opens Edge; sign in once; the session persists for about a week. Nobody around to sign in? `python scripts/run_after_login.py <workbook>` opens the login window, waits for the sign-in, then runs the loop by itself (Part B2) |
 | Assistant (optional) | health → `"assistant":true` (a `secret.key` found nearby). Without it grid names are deterministic |
 | The source | `.xlsx` / `.xlsm` / `.xlsb` (`.xlsb` is converted through Excel first) |
 | Disk | about 70 MB per iteration for a 13 MB model (analysis copy, prepared copy, re-analysis copy, two recalculated copies). Put `--work-dir` outside OneDrive |
@@ -123,6 +123,24 @@ returns *409 a Mind loop is already running*.
 Programmatically: `POST /api/sessions/{id}/mind-loop` with any of
 `maxIterations`, `useAssistant`, `runModel`, `checkNumbers`, `enable`,
 `disable`, `deleteProjects`, `skipMind`.
+
+### Part B2 — Sign in later, let it run by itself (1.7.1)
+
+When the Mind session has expired and you will not be there to click:
+
+```bash
+cd excel-upload-preparation
+python scripts/run_after_login.py "C:\path\Model.xlsm"
+```
+
+with the app already running on port 8600. An Edge window opens on the Mind
+login page and the script waits (24 h by default, `--login-timeout-h`). Sign
+in there whenever you are back; the script then uploads the workbook to the
+app, starts the loop and follows it to the end. Read
+`runs/after_login_<stamp>/summary.txt` afterwards (the log next to it has every
+event). Defaults: the numbers gate is **off** (`--check-numbers` turns it on)
+and the sandbox projects are **kept** so the converted model stays visible in
+Mind (`--delete-projects` removes the deletable ones).
 
 ---
 
