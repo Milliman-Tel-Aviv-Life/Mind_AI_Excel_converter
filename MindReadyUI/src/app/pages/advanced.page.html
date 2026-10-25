@@ -1,0 +1,172 @@
+<section class="page">
+  @if (!store.loaded()) {
+    <h1 class="page-title">Advanced</h1>
+    <p class="page-lead">No workbook is loaded. <a routerLink="/">Load one on the main screen.</a></p>
+  } @else {
+    <header class="head">
+      <div>
+        <h1 class="page-title">Advanced</h1>
+        <p class="page-lead">{{ store.summary()?.file_name }} · {{ store.currentVersion()?.label }}</p>
+      </div>
+      <a cdsButton="ghost" size="md" routerLink="/" [queryParams]="{ session: store.sessionId() }">Back to the main screen</a>
+    </header>
+
+    @if (store.readiness(); as r) {
+      <cds-inline-notification [notificationObj]="{ type: readinessKind(), title: r.headline, message: readinessDetail(), lowContrast: true, showClose: false }"></cds-inline-notification>
+    }
+
+    <mr-stack-bar></mr-stack-bar>
+
+    <div class="switch">
+      <button class="switch__item" [class.switch__item--on]="tab() === 'findings'" (click)="tab.set('findings')">Findings ({{ findings().length }})</button>
+      <button class="switch__item" [class.switch__item--on]="tab() === 'prep'" (click)="tab.set('prep')">Prep actions ({{ manualActions().length }})</button>
+      <button class="switch__item" [class.switch__item--on]="tab() === 'recalc'" (click)="tab.set('recalc')">Recalculate</button>
+      <button class="switch__item" [class.switch__item--on]="tab() === 'loop'" (click)="tab.set('loop')">Mind loop</button>
+      <button class="switch__item" [class.switch__item--on]="tab() === 'map'" (click)="tab.set('map')">Model map</button>
+      <button class="switch__item" [class.switch__item--on]="tab() === 'namer'" (click)="tab.set('namer')">Grid Namer</button>
+      <button class="switch__item" [class.switch__item--on]="tab() === 'assistant'" (click)="tab.set('assistant')">Assistant</button>
+      <button class="switch__item" [class.switch__item--on]="tab() === 'mind'" (click)="tab.set('mind')">Run in Mind</button>
+      <button class="switch__item" [class.switch__item--on]="tab() === 'deliver'" (click)="tab.set('deliver')">Deliver</button>
+      <button class="switch__item" [class.switch__item--on]="tab() === 'versions'" (click)="tab.set('versions')">Versions ({{ store.versions().length }})</button>
+    </div>
+
+    @switch (tab()) {
+      @case ("findings") {
+<div class="tab-body">
+          @if (delta(); as d) {
+            <div class="delta">
+              <strong>Since the previous analysis ({{ d.previous_version_id }} → {{ d.version_id }}):</strong>
+              @if (d.fixed.length) { <span class="delta__ok">{{ d.fixed.length }} fixed: {{ ruleList(d.fixed) }}</span> }
+              @if (d.improved.length) { <span class="delta__ok">{{ d.improved.length }} improved: {{ ruleList(d.improved) }}</span> }
+              @if (d.regressed.length) { <span class="delta__bad">{{ d.regressed.length }} regressed: {{ ruleList(d.regressed) }}</span> }
+              @if (d.fixed.length) { <label class="check"><input type="checkbox" [checked]="showFixed()" (change)="showFixed.set(!showFixed())" /> show the fixed rows</label> }
+            </div>
+          }
+          <div class="row">
+            <label class="check">
+              <input type="checkbox" [checked]="onlyOpen()" (change)="onlyOpen.set(!onlyOpen())" />
+              Hide the rules that pass
+            </label>
+            <span class="switch switch--small">
+              <button class="switch__item" [class.switch__item--on]="view() === 'table'" (click)="view.set('table')">Table</button>
+              <button class="switch__item" [class.switch__item--on]="view() === 'map'" (click)="view.set('map')">Workbook map</button>
+            </span>
+          </div>
+          @if (view() === "map") {
+            <div class="map">
+              @for (sh of sheetMap(); track sh.name) {
+                <div class="map__sheet">
+                  <h4 class="map__name">{{ sh.name }}@if (sh.state !== "visible") { <span class="dim"> ({{ sh.state }})</span> } <span class="dim">{{ sh.grids.length }} grids{{ sh.loose ? " · " + sh.loose + " loose findings" : "" }}</span></h4>
+                  @for (g of sh.grids; track g.grid.ref) {
+                    <div class="gcard" [class.gcard--untitled]="!g.grid.name" [class.gcard--flagged]="g.findings.length">
+                      <div class="gcard__head"><span class="gcard__title">{{ g.grid.name ? "#" + g.grid.name : "untitled" }}</span><span class="mono dim">{{ g.grid.ref }}</span></div>
+                      @if (g.findings.length) {
+                        <div class="gcard__chips">
+                          @for (f of g.findings; track $index) { <button class="chip chip--button" [title]="f.message" (click)="askAbout(f)">{{ f.rule_id }}</button> }
+                        </div>
+                      }
+                    </div>
+                  }
+                </div>
+              }
+            </div>
+          } @else {
+          <table class="list">
+            <thead>
+              <tr>
+                <th>Rule</th>
+                <th>Status</th>
+                <th>Where</th>
+                <th>Finding</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (f of findings(); track $index) {
+                <tr>
+                  <td class="mono">{{ f.rule_id }}</td>
+                  <td><cds-tag [type]="tag(f.status).type" size="sm">{{ tag(f.status).label }}</cds-tag></td>
+                  <td class="mono">{{ where(f) }}</td>
+                  <td>{{ f.message }}</td>
+                  <td class="ask">@if (f.status !== "PASS") { <button cdsButton="ghost" size="sm" (click)="askAbout(f)">Ask the assistant</button> }</td>
+                </tr>
+              }
+            </tbody>
+          </table>
+          }
+        </div>
+      }
+      @case ("prep") {
+        <mr-prep-panel></mr-prep-panel>
+      }
+      @case ("recalc") {
+        <mr-recalc-panel></mr-recalc-panel>
+      }
+      @case ("loop") {
+        <mr-loop-panel></mr-loop-panel>
+      }
+      @case ("map") {
+        <mr-map-panel></mr-map-panel>
+      }
+      @case ("namer") {
+        <mr-grid-namer-panel></mr-grid-namer-panel>
+      }
+      @case ("assistant") {
+        <mr-assistant-panel></mr-assistant-panel>
+      }
+      @case ("mind") {
+        <mr-mind-run-panel></mr-mind-run-panel>
+      }
+      @case ("deliver") {
+        <mr-deliver-panel></mr-deliver-panel>
+      }
+      @case ("versions") {
+<div class="tab-body">
+          @if (restoreLine()) {
+            <p class="hint">{{ restoreLine() }}</p>
+          }
+          <table class="list">
+            <thead>
+              <tr>
+                <th>Version</th>
+                <th>Source</th>
+                <th>Verified</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              @for (v of versionsNewestFirst(); track v.id) {
+                <tr [class.current]="v.id === store.currentVersion()?.id">
+                  <td>{{ v.label }}</td>
+                  <td class="mono">{{ v.source }}</td>
+                  <td>{{ v.verified_opens_in_excel ? "opens in Excel" : "" }}</td>
+                  <td class="row-actions">
+                    @if (downloadUrl(v.file_name); as url) {
+                      <a cdsButton="ghost" size="sm" [href]="url">Download</a>
+                    }
+                    @if (v.id !== store.currentVersion()?.id) {
+                      <button cdsButton="ghost" size="sm" (click)="restore(v.id)">Make current</button>
+                    }
+                    @if (v.change_log?.length) {
+                      <button cdsButton="ghost" size="sm" (click)="toggleChanges(v.id)">{{ changesOpen(v.id) ? "Hide" : "Show" }} {{ v.change_log!.length }} changes</button>
+                    }
+                  </td>
+                </tr>
+                @if (changesOpen(v.id)) {
+                  <tr>
+                    <td colspan="4">
+                      <ul class="changes mono">
+                        @for (c of v.change_log!.slice(0, 120); track $index) { <li>{{ changeText(c) }}</li> }
+                        @if (v.change_log!.length > 120) { <li>… {{ v.change_log!.length - 120 }} more</li> }
+                      </ul>
+                    </td>
+                  </tr>
+                }
+              }
+            </tbody>
+          </table>
+        </div>
+      }
+    }
+  }
+</section>

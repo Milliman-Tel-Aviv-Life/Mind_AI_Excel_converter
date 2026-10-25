@@ -5,8 +5,7 @@ Every top-level model here corresponds 1:1 to one schema file and uses
 Fields typed loosely as ``dict``/``list`` mirror schema properties that are
 themselves only declared as ``type: object`` / ``type: array`` with no
 further nested schema -- tightening them further would be inventing
-structure the package doesn't document (SKILL.md rule #4: never invent
-requirements).
+structure the package doesn't document (no requirement is invented).
 """
 from __future__ import annotations
 
@@ -98,6 +97,9 @@ class Finding(BaseModel):
     readiness_impact: Status
     correction_available: bool = False
     source: dict[str, Any] = Field(default_factory=dict)
+    # The rule's own priority (REQUIRED / RECOMMENDED / INFORMATIONAL),
+    # so the UI can tell a change Mind *needs* from one it merely benefits from.
+    priority: str | None = None
 
 
 class WorkbookAnalysis(BaseModel):

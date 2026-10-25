@@ -1,6 +1,6 @@
-"""Scan progress (1.6.6): the stages a scan goes through, their weights and
-the overall figure -- shared by the web server's status endpoint
-(GET /api/sessions/{id}/status) and the Streamlit status bar.
+"""Scan progress: the stages a scan goes through, their weights and
+the overall figure, served by the web server's status endpoint
+(GET /api/sessions/{id}/status).
 
 The engine reports `progress(stage, message, fraction, **facts)` from
 app/inventory.py (copy, load, inventory, names) and app/modes/common.py
@@ -34,6 +34,21 @@ STAGE_TITLES = {
     "rules": "Checking the rules",
     "report": "Building the report",
     "plan": "Planning the fixes",
+    "done": "Done",
+}
+
+# The stages of an Apply (Prep, Fix panel, Grid Namer), reported by
+# app/prep.py `apply_operations(progress=...)`. Only "apply_write" carries
+# facts `done` / `total` (operations written so far / to write): the others
+# are single Excel calls that cannot say how far they are.
+APPLY_STAGES: list[str] = ["apply_copy", "apply_write", "apply_save", "apply_verify", "apply_log"]
+
+APPLY_STAGE_TITLES = {
+    "apply_copy": "Copying the workbook",
+    "apply_write": "Writing the changes",
+    "apply_save": "Saving the copy",
+    "apply_verify": "Checking the copy opens in Excel",
+    "apply_log": "Writing the change log",
     "done": "Done",
 }
 

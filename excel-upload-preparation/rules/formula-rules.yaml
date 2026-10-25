@@ -90,3 +90,192 @@ rules:
   fail_if:
   - VBA logic is required.
   severity_source: BLOCKER
+- id: FRM-005
+  version: 1.0.0
+  status: active
+  category: formula
+  description: 'Circular References -- a cycle among formula cells stops Mind''s runner ("Run error: Circular reference found").'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-09-30, a client model)
+    article: FRM-005
+  validation:
+    deterministic: true
+    implementation: validators.formula.circular_references
+  correction:
+    automatic: false
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - No formula cell depends on itself, directly or through other cells, ranges or defined names.
+  fail_if:
+  - A cycle exists among formula cells.
+  severity_source: BLOCKER
+- id: FRM-006
+  version: 1.0.0
+  status: active
+  category: formula
+  description: '3-D References -- ''First:Last''!cell spans several sheets; Mind reads ''First:Last'' as one sheet name ("Sheet ... not found in workbook on compiling formula").'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-09-30, a client model)
+    article: FRM-006
+  validation:
+    deterministic: true
+    implementation: validators.formula.three_d_references
+  correction:
+    automatic: true
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - No formula references a sheet range ('First:Last'!cell).
+  fail_if:
+  - A formula references a sheet range.
+  severity_source: BLOCKER
+- id: FRM-007
+  version: 1.0.0
+  status: active
+  category: formula
+  description: 'INDIRECT used as a value -- Mind returns a reference for INDIRECT and cannot turn it into a value ("Unable to cast AM.Models.AMReference to System.IConvertible").'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-10-01, a client model)
+    article: FRM-007
+  validation:
+    deterministic: true
+    implementation: validators.formula.indirect_as_value
+  correction:
+    automatic: true
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - No formula compares, multiplies, divides, negates or concatenates the result of INDIRECT.
+  fail_if:
+  - The result of INDIRECT is used as a value.
+  severity_source: BLOCKER
+- id: FRM-008
+  version: 1.0.0
+  status: active
+  category: formula
+  description: 'Empty text in arithmetic -- Excel stops on "" (#VALUE!) and IFERROR (or IF on ISNUMBER / ISERROR) returns its fallback; Mind counts "" as 0 and computes a number.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-10-06, a client model and a 49-cell test workbook)
+    article: FRM-008
+  validation:
+    deterministic: true
+    implementation: validators.formula.blank_text_arithmetic
+  correction:
+    automatic: true
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - No IFERROR (or IF on ISNUMBER / ISERROR) hides arithmetic on a cell that holds "" (empty text).
+  fail_if:
+  - A formula does arithmetic on a cell that holds "" inside IFERROR, or inside an IF that tests ISNUMBER / ISERROR on it, and shows the fallback in Excel.
+  severity_source: BLOCKER
+- id: FRM-009
+  version: 1.0.0
+  status: active
+  category: formula
+  description: 'Empty cell compared with a number -- Excel reads the empty cell as 0; Mind does not, so the comparison goes the other way.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-10-06, a client model and a 49-cell test workbook)
+    article: FRM-009
+  validation:
+    deterministic: true
+    implementation: validators.formula.empty_cell_compared
+  correction:
+    automatic: true
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - No formula compares a number with an empty cell, directly or through a reference or lookup that lands on an empty cell.
+  fail_if:
+  - A number is compared with an empty cell, or with a formula cell that lands on one.
+  severity_source: BLOCKER
+- id: FRM-010
+  version: 1.0.0
+  status: active
+  category: formula
+  description: 'Empty text as lookup key -- VLOOKUP("") finds nothing in Excel (IFERROR returns its fallback); Mind matches an empty cell of the looked-up column, the header of a titled table, and returns that row.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-10-06, a client model and three diagnostic uploads)
+    article: FRM-010
+  validation:
+    deterministic: true
+    implementation: validators.formula.blank_text_lookup_key
+  correction:
+    automatic: true
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - No IFERROR hides an exact lookup whose key holds "" over a column or row with an empty cell.
+  fail_if:
+  - An exact VLOOKUP / HLOOKUP / MATCH inside IFERROR takes a key that holds "" and searches a column or row that has an empty cell.
+  severity_source: BLOCKER
+- id: FRM-011
+  version: 1.0.0
+  status: active
+  category: formula
+  description: 'Line break inside a string literal -- a line break typed inside the quotes of a formula; Mind computes another text, CHAR(10) gives the same text in both.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-10-08, a client model and a diagnostic sheet)
+    article: FRM-011
+  validation:
+    deterministic: true
+    implementation: validators.formula.line_break_in_text
+  correction:
+    automatic: true
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - No formula holds a line break inside a string literal.
+  fail_if:
+  - A string literal in a formula holds a line break.
+  severity_source: BLOCKER
+- id: FRM-012
+  version: 1.0.0
+  status: active
+  category: formula
+  description: 'Formula asks Excel about itself -- CELL("filename", ...), INFO(...): the file, its path, the session; Mind has nothing to answer with and the run stops.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-10-08, a client model)
+    article: FRM-012
+  validation:
+    deterministic: true
+    implementation: validators.formula.environment_formulas
+  correction:
+    automatic: true
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - No formula calls CELL or INFO.
+  fail_if:
+  - A formula calls CELL or INFO.
+  severity_source: BLOCKER
+- id: FRM-013
+  version: 1.0.0
+  status: active
+  category: formula
+  description: 'Error cell kept on purpose that Mind computes -- arithmetic on "" (empty text) with no IFERROR shows #VALUE! in Excel; Mind counts "" as 0 and computes a number, and what read the error changes.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-10-08, a client model)
+    article: FRM-013
+  validation:
+    deterministic: true
+    implementation: validators.formula.blank_text_error_kept
+  correction:
+    automatic: true
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - No error cell comes from arithmetic on a cell that holds "" without IFERROR.
+  fail_if:
+  - A cell shows #VALUE! because its formula does arithmetic on a cell that holds "", with no IFERROR.
+  severity_source: BLOCKER

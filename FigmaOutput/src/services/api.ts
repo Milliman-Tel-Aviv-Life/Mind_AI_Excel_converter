@@ -1,4 +1,4 @@
-import type { ApplyResult, CellWindow, ChatMessage, ChatReply, Delta, FixTarget, Mode, Operation, PrepAction, RecalcResult, ReportBuild, ScanStatus, SizeInfo, ValidationReport, Version, WorkbookSummary } from "../types";
+import type { ApplyReport, ApplyResult, CellWindow, ChatMessage, ChatReply, ChatStreamEvent, Delta, FixTarget, Mode, Operation, PrepAction, PrepProgress, Readiness, RecalcResult, ReportBuild, ScanStatus, SizeInfo, ValidationReport, Version, WorkbookSummary } from "../types";
 
 import workbookMock from "../mocks/workbook.json";
 import reportMock from "../mocks/report.json";
@@ -57,6 +57,9 @@ export interface SessionStart {
   size?: SizeInfo | null;
   scan?: ScanStatus;
   pending?: false;
+  /** 1.7.2: the verdict and the Prep gauge travel with every analysis */
+  readiness?: Readiness | null;
+  prep_progress?: PrepProgress | null;
 }
 
 /**
@@ -85,12 +88,21 @@ export interface Reanalysis {
   plan: PrepAction[];
   delta?: Delta;
   versions?: Version[];
+  readiness?: Readiness | null;
+  prep_progress?: PrepProgress | null;
+}
+
+/** 1.7.2: the verdict for the current version, on demand (it also comes with every analysis). */
+export async function getReadiness(sessionId: string): Promise<{ readiness: Readiness; prep_progress: PrepProgress }> {
+  return unwrap(await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/readiness`));
 }
 
 /** applyOperations also returns the re-analysis of the new file when the backend ran one. */
 export interface ApplyOutcome extends Partial<Reanalysis> {
   result: ApplyResult;
   version: Version;
+  /** 1.7.3: the Apply, repair by repair (absent from an older backend) */
+  outcome?: ApplyReport | null;
 }
 
 export interface UploadOptions {
@@ -124,6 +136,12 @@ export async function uploadWorkbook(file: File, mode: Mode, options: UploadOpti
  * Scan a deferred upload (or scan the current version again) skipping
  * `ignoreSheets`. A long call: poll scanStatus() meanwhile for the indicator.
  */
+/** 1.10.0: a session the backend still holds, in the shape an upload returns (404 once the server restarted). */
+export async function resumeSession(sessionId: string): Promise<SessionStart & { mode: Mode }> {
+  const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}`);
+  return unwrap<SessionStart & { mode: Mode }>(res);
+}
+
 export async function analyzeSession(sessionId: string, ignoreSheets: string[] = []): Promise<SessionStart> {
   if (USE_MOCKS) {
     await delay(3000);
@@ -162,7 +180,7 @@ export async function reanalyze(sessionId: string, versionId: string): Promise<R
 export async function applyOperations(
   sessionId: string,
   operations: Operation[],
-  options: { reanalyze?: boolean } = {}
+  options: { reanalyze?: boolean; versionStep?: "minor" | "major" } = {}
 ): Promise<ApplyOutcome> {
   if (USE_MOCKS) {
     await delay(3000);
@@ -192,6 +210,7 @@ export async function applyOperations(
   return post<ApplyOutcome>(`/sessions/${encodeURIComponent(sessionId)}/apply`, {
     operations,
     reanalyze: options.reanalyze ?? true,
+    versionStep: options.versionStep ?? "major",
   });
 }
 
@@ -228,7 +247,11 @@ export async function chat(sessionId: string, history: ChatMessage[], question: 
       provenance: { context_chars: 14200, detail_chars: 2100, lookups: 1 },
     };
   }
-  return post<ChatReply>(`/sessions/${encodeURIComponent(sessionId)}/chat`, {
+  return post<ChatReply>(`/sessions/${encodeURIComponent(sessionId)}/chat`, chatBody(history, question, focus));
+}
+
+function chatBody(history: ChatMessage[], question: string, focus?: FixTarget) {
+  return {
     history: history.map((m) => ({ role: m.role, content: m.content, note: m.note ?? false })),
     question,
     focus: focus
@@ -244,7 +267,64 @@ export async function chat(sessionId: string, history: ChatMessage[], question: 
           cause: focus.cause,
         }
       : undefined,
+  };
+}
+
+/**
+ * 1.7.2: the same turn as chat(), streamed. The backend sends NDJSON lines --
+ * `phase` before every model call, `delta` for each chunk of its text -- and
+ * ends with `done` (the chat() payload) or `error`. Falls back to chat() with
+ * mocks or on a backend without the route (404).
+ */
+export async function chatStream(
+  sessionId: string,
+  history: ChatMessage[],
+  question: string,
+  focus: FixTarget | undefined,
+  onEvent: (ev: ChatStreamEvent) => void
+): Promise<ChatReply> {
+  if (USE_MOCKS) return chat(sessionId, history, question, focus);
+  const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(chatBody(history, question, focus)),
   });
+  if (res.status === 404 || res.status === 405) {
+    // A pre-1.7.2 backend has no such route: FastAPI answers "Not Found", or 405 via the GET-only
+    // SPA catch-all. Anything else (e.g. an unknown session) is a real error.
+    const body = await res.json().catch(() => null);
+    if (!body || body.detail === "Not Found" || body.detail === "Method Not Allowed") return chat(sessionId, history, question, focus);
+    throw new Error(typeof body.detail === "string" ? body.detail : `${res.status} ${res.statusText}`);
+  }
+  if (!res.ok || !res.body) return unwrap<ChatReply>(res);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const out: { reply: ChatReply | null } = { reply: null };
+  const handle = (line: string) => {
+    if (!line.trim()) return;
+    const ev = JSON.parse(line);
+    if (ev.type === "done") {
+      out.reply = { text: ev.text, proposal: ev.proposal ?? null, provenance: ev.provenance };
+    } else if (ev.type === "error") {
+      throw new Error(ev.detail || "the assistant failed");
+    } else if (ev.type === "phase" || ev.type === "delta") {
+      onEvent(ev as ChatStreamEvent);
+    }
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      handle(buffer.slice(0, nl));
+      buffer = buffer.slice(nl + 1);
+    }
+  }
+  handle(buffer + decoder.decode());
+  if (!out.reply) throw new Error("the reply stream ended early");
+  return out.reply;
 }
 
 export async function recalculate(sessionId: string): Promise<RecalcResult> {
@@ -258,6 +338,130 @@ export async function recalculate(sessionId: string): Promise<RecalcResult> {
     };
   }
   return post<RecalcResult>(`/sessions/${encodeURIComponent(sessionId)}/recalculate`);
+}
+
+// --- 1.8.0: fix all automatically (the Recalculate step) -------------------------------------
+/** One kind of error the fixer fixed: the cells sharing a formula, what was written, and why. */
+export interface AutoFixGroup {
+  sheet: string;
+  error: string;
+  cells: number;
+  ranges: string[];
+  more_ranges: number;
+  cell: string;
+  before: string;
+  after: string | number | boolean;
+  strategy: string;
+  reason: string;
+  kind: string;
+}
+
+/** An error the fixer left: where, how many like it, and why it did not fix it. */
+export interface AutoFixLeft {
+  sheet: string;
+  cell: string;
+  error: string;
+  formula: string;
+  count: number;
+  why: string;
+  tried: boolean;
+}
+
+export interface AutoFixResult {
+  status: "clean" | "partial" | "stuck" | "unchanged" | "error";
+  summary: string;
+  errors_before: number;
+  errors_after: number;
+  cells_fixed: number;
+  cells_rewritten: number;
+  passes: number;
+  rolled_back: number;
+  by_strategy: Record<string, number>;
+  fix_groups: number;
+  left_groups: number;
+  left_count: number;
+  /** only with keep_good_values false: good values that moved, listed */
+  good_values_changed: number;
+  keep_good_values: boolean;
+  /** error cells that computed a value in the original workbook: the preparation broke them, the fixer leaves them */
+  regression_cells?: number;
+  /** on a prepared version: the comparison with the original the fixer ran before it started */
+  numbers_check?: NumbersCheck | null;
+  /** present on the full result only */
+  fixes?: AutoFixGroup[];
+  left?: AutoFixLeft[];
+  good_values_changed_list?: { sheet: string; cell: string; before: unknown; after: unknown; formula: string }[];
+}
+
+/** 1.8.0: did the preparation change what the model computes? (POST /numbers-check) */
+export interface NumbersCheck {
+  ran: boolean;
+  clean: boolean | null;
+  verdict: string;
+  version_id?: string;
+  counts: Record<string, number>;
+  by_sheet?: Record<string, Record<string, number>>;
+  samples?: Record<string, { original: string; now: string; was: string; is?: string }[]>;
+  moves?: { row_inserts: number; column_inserts: number; sheet_renames: number };
+  regressions?: number;
+}
+
+export async function numbersCheck(sessionId: string): Promise<NumbersCheck> {
+  if (USE_MOCKS) return { ran: false, clean: true, verdict: "This is the original workbook: nothing to compare.", counts: {} };
+  return post<NumbersCheck>(`/sessions/${encodeURIComponent(sessionId)}/numbers-check`);
+}
+
+export interface AutoFixStatus {
+  state: "idle" | "running" | "done" | "error";
+  stage?: string;
+  title?: string;
+  message?: string;
+  fraction?: number | null;
+  pass_no?: number;
+  errors?: number | null;
+  errors_before?: number | null;
+  kept?: number;
+  elapsed_s?: number;
+  error?: string | null;
+  /** the version the run started from */
+  version_id?: string;
+  use_assistant?: boolean;
+  keep_good_values?: boolean;
+  /** the version the run produced (none when nothing was fixed) */
+  version?: Version | null;
+  result?: AutoFixResult;
+  /** full result only: the run's own recalculation and the analysis of the new version */
+  recalc?: RecalcResult | null;
+  analysis?: Partial<Reanalysis> | null;
+}
+
+export interface AutoFixOptions {
+  /** the assistant says which value each kind of error should fall back to (default true) */
+  use_assistant?: boolean;
+  /** the owner's rule: a good value never changes (default true) */
+  keep_good_values?: boolean;
+  time_budget_min?: number;
+}
+
+export async function startAutoFix(sessionId: string, options: AutoFixOptions = {}): Promise<AutoFixStatus> {
+  if (USE_MOCKS) {
+    await delay(300);
+    return { state: "running", stage: "read", title: "Reading the workbook", message: "Opening the workbook in Excel", pass_no: 0, elapsed_s: 0 };
+  }
+  return post<AutoFixStatus>(`/sessions/${encodeURIComponent(sessionId)}/auto-fix`, options);
+}
+
+export async function autoFixStatus(sessionId: string, full = false): Promise<AutoFixStatus> {
+  if (USE_MOCKS) {
+    await delay(200);
+    return { state: "idle" };
+  }
+  return unwrap<AutoFixStatus>(await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/auto-fix${full ? "?full=1" : ""}`));
+}
+
+export async function stopAutoFix(sessionId: string): Promise<AutoFixStatus> {
+  if (USE_MOCKS) return { state: "idle" };
+  return post<AutoFixStatus>(`/sessions/${encodeURIComponent(sessionId)}/auto-fix/stop`);
 }
 
 export async function generateReports(sessionId: string): Promise<ReportBuild> {
@@ -302,6 +506,7 @@ export interface GridNamesResult {
   message: string | null;
   applied: boolean;
   plan?: PrepAction[] | null;
+  readiness?: Readiness | null;
 }
 
 /**
@@ -364,6 +569,7 @@ export interface NamedArea { sheet: string; ref: string; name: string; flags: st
 export interface GridNamerOutcome extends Partial<Reanalysis> {
   result: ApplyResult;
   version: Version;
+  outcome?: ApplyReport | null;
   /** Grid keys ("Sheet!Ref") a title was written for. */
   named: string[];
   /** Refused areas and automatic-titler skips, each with its reason. */
@@ -486,4 +692,91 @@ export async function listVersions(sessionId: string): Promise<Version[]> {
   }
   const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/versions`);
   return unwrap<Version[]>(res);
+}
+
+
+// --- Model map (1.9.0): where the inputs, the loop driver, the run settings and the outputs are ---
+export interface MapCell { cell: string | null; name?: string | null; label?: string | null; value?: unknown; evidence?: string; how?: string }
+export interface ModelMap {
+  workbook: string;
+  has_macros: boolean;
+  notes: string[];
+  sheets: { name: string; role: string; dims: string | null; state: string | null; grids: number }[];
+  loop: {
+    found: boolean;
+    how_to_run: string | null;
+    drivers: (MapCell & { macro: string; loop_var: string; set_from?: string | null; set_from_name?: string | null; nested_depth: number })[];
+    bounds: (MapCell & { role: "first" | "last"; formula?: string | null; macro: string })[];
+    item_cells: (MapCell & { macro: string; template_sheet: string | null; template_present: boolean })[];
+    key_cells: (MapCell & { readers: number; cells: number })[];
+    entry_points: string[];
+    macros: { procedure: string; module: string | null; var: string; from: string; to: string; depth: number; drivers: string[]; outputs: number }[];
+  };
+  inputs: {
+    per_item: { cell: string; what: string; macro: string }[];
+    sheets: { sheet: string; formulas: number; state: string | null; why: string }[];
+    tables: { name: string; cell: string; readers: number; role: string }[];
+  };
+  run_settings: {
+    switches: (MapCell & { options: string[]; how: string })[];
+    named_settings: (MapCell & { readers: number; switch_like: boolean })[];
+    labelled: { sheet: string; cell: string; label: string; value: unknown }[];
+    status: (MapCell & { written_in: string[] })[];
+    tables: { name: string; cell: string; readers: number; role: string }[];
+  };
+  outputs: {
+    cells: (MapCell & { from: string | null; from_name: string | null; written_by: string; when: string })[];
+    sheets: { sheet: string; formulas: number; why: string }[];
+    saves: { in: string; path_from: string | null; name: string | null }[];
+  };
+  macros: { procedures: { name: string; module: string | null; statements: number; calls: string[] }[]; entry_points: string[] };
+}
+
+// --- Mind loop (1.10.0): the macro's run loop as MM_LOOP / MM_RESULT formulas ---
+export interface LoopPlanCell { cell: string; sheet: string; ref: string; range: string; formula: string; header?: unknown }
+export interface LoopPlanLoop {
+  name: string; driver: string; driver_name: string | null; label: string | null; macro: string | null; loop_var: string; source: string | null;
+  first: number | null; last: number | null; count: number | null; first_from: Record<string, unknown>; last_from: Record<string, unknown>;
+  cells: LoopPlanCell[]; notes: string[]; status: "ready" | "needs_decision" | "not_built"; kind: string | null; how: string | null; why?: string;
+}
+export interface LoopPlanOutput { target: string; from: string | null; written_by: string | null; when: string | null; status: string; cells: number; items: number; example: string | null; loop: string | null; why?: string }
+export interface LoopPlanClear { target: string; resolved?: string; status: string; cells?: number; included?: boolean; why?: string }
+export interface LoopPlan {
+  found: boolean; loops: LoopPlanLoop[]; outputs: LoopPlanOutput[]; clears: LoopPlanClear[];
+  operations: Operation[]; operation_count: number; notes: string[];
+  counts: { loop_cells: number; result_cells: number; cleared: number; extra: number }; how_it_runs: string | null;
+}
+export interface LoopPlanOptions { name?: string; first?: string; last?: string; count_cell?: string; clear_old?: boolean }
+
+function loopQuery(o: LoopPlanOptions): string {
+  const q = new URLSearchParams();
+  if (o.name) q.set("name", o.name);
+  if (o.first) q.set("first", o.first);
+  if (o.last) q.set("last", o.last);
+  if (o.count_cell) q.set("count_cell", o.count_cell);
+  if (o.clear_old) q.set("clear_old", "true");
+  const t = q.toString();
+  return t ? `?${t}` : "";
+}
+
+export async function mindLoopPlan(sessionId: string, o: LoopPlanOptions = {}): Promise<{ version_id: string; plan: LoopPlan }> {
+  if (USE_MOCKS) {
+    await delay(200);
+    return { version_id: "mock", plan: { found: false, loops: [], outputs: [], clears: [], operations: [], operation_count: 0, notes: ["mock"], counts: { loop_cells: 0, result_cells: 0, cleared: 0, extra: 0 }, how_it_runs: null } };
+  }
+  const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/mind-loop-plan${loopQuery(o)}`);
+  return unwrap<{ version_id: string; plan: LoopPlan }>(res);
+}
+
+export async function applyMindLoopPlan(sessionId: string, o: LoopPlanOptions = {}): Promise<ApplyOutcome & { plan: Omit<LoopPlan, "operations" | "operation_count"> }> {
+  return post<ApplyOutcome & { plan: Omit<LoopPlan, "operations" | "operation_count"> }>(`/sessions/${encodeURIComponent(sessionId)}/mind-loop-plan/apply`, { ...o, reanalyze: true });
+}
+
+export async function modelMap(sessionId: string, refresh = false): Promise<{ version_id: string; map: ModelMap }> {
+  if (USE_MOCKS) {
+    await delay(200);
+    return { version_id: "mock", map: { workbook: "mock.xlsm", has_macros: false, notes: ["mock"], sheets: [], loop: { found: false, how_to_run: null, drivers: [], bounds: [], item_cells: [], key_cells: [], entry_points: [], macros: [] }, inputs: { per_item: [], sheets: [], tables: [] }, run_settings: { switches: [], named_settings: [], labelled: [], status: [], tables: [] }, outputs: { cells: [], sheets: [], saves: [] }, macros: { procedures: [], entry_points: [] } } };
+  }
+  const res = await fetch(`${API}/sessions/${encodeURIComponent(sessionId)}/model-map${refresh ? "?refresh=true" : ""}`);
+  return unwrap<{ version_id: string; map: ModelMap }>(res);
 }

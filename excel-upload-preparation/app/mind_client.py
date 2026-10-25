@@ -4,7 +4,7 @@ automatically.
 
 Design notes
 ------------
-- A *separate* persistent Edge profile under %LOCALAPPDATA%\\MindReady\\edge-profile
+- A *separate* persistent Edge profile under <data folder>\\edge-profile (settings.yaml)
   (never OneDrive-synced, never committed) keeps the login session. This is
   distinct from the user's normal Edge profile, so the user's own Edge does not
   need to be closed.
@@ -15,8 +15,8 @@ Design notes
 
 This module is deliberately small and dependency-light (only Playwright).
 
-Project operations (1.6.8) -- the selectors below were mapped on the live site
-and proven by the Shlomo closed loop; every one takes the Playwright ``page``
+Project operations -- the selectors below were mapped on the live site and
+proven by a full closed loop on a real model; every one takes the Playwright ``page``
 from ``mind_session`` and returns plain dicts so ``app/mind_loop.py`` can run
 unattended:
 
@@ -27,7 +27,6 @@ unattended:
 from __future__ import annotations
 
 import json
-import os
 import re
 import time
 from contextlib import contextmanager
@@ -36,15 +35,17 @@ from typing import Any, Iterator
 
 from playwright.sync_api import Page, sync_playwright
 
+from .settings import SETTINGS
+
 # --- stable, non-synced locations --------------------------------------------
-_ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "MindReady"
+_ROOT = SETTINGS.data_folder
 PROFILE_DIR = _ROOT / "edge-profile"
 DOWNLOAD_DIR = _ROOT / "downloads"
 RECON_DIR = _ROOT / "recon"
 SESSION_FILE = _ROOT / "mind_session.json"
 SIGNAL_FILE = _ROOT / "login_done.signal"  # optional manual "I'm logged in" marker
 
-APP_HOST_SUFFIX = "milliman-mind.com"
+APP_HOST_SUFFIX = SETTINGS.mind_host_suffix
 # URL fragments that mean "still on an identity-provider / login page"
 _LOGIN_HINTS = ("login", "signin", "sign-in", "sso", "/auth", "oauth", "adfs",
                 "microsoftonline", "okta", "b2clogin", "authorize", "logon", "idp")
@@ -262,10 +263,12 @@ def is_authenticated() -> dict[str, Any]:
             return {"authenticated": False, "error": str(e)[:200]}
 
 
-# --- project operations (mapped on the live site, 1.6.8) ----------------------
-MAIN_URL = "https://shared.milliman-mind.com/main"
+# --- project operations (mapped on the live site) -----------------------------
+MAIN_URL = SETTINGS.mind_main_url
 MANAGER_HOST = "prod01"
-SANDBOX_FOLDER = "MindReady_Sandbox"
+# the sandbox folder the app creates its projects in, and the only place it deletes from
+SANDBOX_FOLDER = SETTINGS.mind_sandbox_folder
+PROJECT_PREFIX = SETTINGS.mind_project_prefix
 # Angular ngx-guided-tour: a full-screen mask that intercepts every click and
 # re-arms on each page load. Removed before any interaction.
 _TOUR_MASK = "ngx-guided-tour,.guided-tour-user-input-mask,.guided-tour-spotlight-overlay"
@@ -351,15 +354,23 @@ def open_manager(page: Page) -> bool:
 
 def ensure_folder(page: Page, folder: str = SANDBOX_FOLDER) -> bool:
     """Open `folder` in the manager, creating it when it does not exist."""
-    exists = page.evaluate("(f)=>[...document.querySelectorAll('a')].some(e=>((e.innerText||'').trim().startsWith(f)))", folder)
+    exists = False
+    for _ in range(6):  # the manager's list may still be loading right after a run; look again before creating anything
+        exists = page.evaluate("(f)=>[...document.querySelectorAll('a')].some(e=>((e.innerText||'').trim().startsWith(f)))", folder)
+        if exists:
+            break
+        _wait(page, 1500)
     if not exists:
-        page.get_by_role("button", name=re.compile(r"^\s*New folder\s*$", re.I)).first.click(timeout=6000)
-        _wait(page, 1200)
-        kill_tour(page)
-        page.locator('input[placeholder="Choose a folder name"]').first.fill(folder, timeout=5000)
-        page.get_by_role("button", name=re.compile(r"^\s*Create new folder\s*$", re.I)).first.click(timeout=5000)
-        _wait(page, 2500)
-        kill_tour(page)
+        try:
+            page.get_by_role("button", name=re.compile(r"^\s*New folder\s*$", re.I)).first.click(timeout=6000)
+            _wait(page, 1200)
+            kill_tour(page)
+            page.locator('input[placeholder="Choose a folder name"]').first.fill(folder, timeout=5000)
+            page.get_by_role("button", name=re.compile(r"^\s*Create new folder\s*$", re.I)).first.click(timeout=5000)
+            _wait(page, 2500)
+            kill_tour(page)
+        except Exception:
+            return False
     try:
         page.get_by_role("link", name=re.compile(rf"^\s*{re.escape(folder)}")).first.click(timeout=6000)
         _wait(page, 1500)
@@ -413,8 +424,10 @@ def step_status(page: Page) -> dict[str, str]:
 
 
 def read_error_logs(page: Page) -> list[str]:
-    """Click 'Display Error Logs' and return the messages ('#N <kind>\\n<message>')."""
-    btn = page.get_by_role("button", name=re.compile(r"Display Error Logs", re.I))
+    """Click 'Display Error Logs' / 'View logs' and return the errors, each as one line:
+    '<kind>: <message lines> | MODEL ... | <model> > <instance> > <sheet>!<cell> | <mind ref>'
+    (the whole block of each error, not just its first line)."""
+    btn = page.get_by_role("button", name=re.compile(r"Display Error Logs|View logs", re.I))
     if not btn.count():
         return []
     try:
@@ -425,9 +438,14 @@ def read_error_logs(page: Page) -> list[str]:
     text = body_text(page)
     out: list[str] = []
     seen: set[str] = set()
-    for m in re.finditer(r"#\d+\s+([^\n]+)\n+\s*([^\n]+)", text):
-        msg = m.group(2).strip()
-        if msg and msg.lower() not in ("close", "hide error logs") and msg not in seen:
+    for block in re.split(r"(?=#\d+\s+[A-Za-z][^\n]*\n)", text):
+        m = re.match(r"#\d+\s+([^\n]+)\n(.*)", block, re.S)
+        if not m:
+            continue
+        body = re.split(r"\n\s*(?:Close|Hide Error Logs)\s*(?:\n|$)", m.group(2))[0]
+        lines = [ln.strip() for ln in body.splitlines() if ln.strip()]
+        msg = (m.group(1).strip() + ": " + " | ".join(lines)) if lines else m.group(1).strip()
+        if msg not in seen:
             seen.add(msg)
             out.append(msg)
     return out
@@ -619,9 +637,9 @@ def project_exists(page: Page, name: str) -> bool:
 
 def delete_project(page: Page, name: str, folder: str = SANDBOX_FOLDER, attempts: int = 2) -> str:
     """Best-effort delete of a sandbox project through the tile menu and the
-    type-'delete'-to-confirm modal. Refuses any name outside the sandbox
-    convention. Returns 'deleted' | 'still present' | 'not found' | 'refused'."""
-    if not name.startswith("zzz_"):
+    type-'delete'-to-confirm modal. Refuses any name without the sandbox
+    project prefix the app is allowed to create and delete. Returns 'deleted' | 'still present' | 'not found' | 'refused'."""
+    if not name.startswith(PROJECT_PREFIX):
         return "refused"
     result = "not found"
     for _ in range(attempts):

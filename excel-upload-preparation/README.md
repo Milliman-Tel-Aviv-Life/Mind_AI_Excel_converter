@@ -22,11 +22,134 @@ Provider-neutral, Python-oriented instruction and rule package for preparing Exc
 
 `PASS`, `WARNING`, `ERROR`, `REQUIRES_USER_INPUT`, `NOT_SUPPORTED`.
 
-## Current status (1.7.1)
+## Current status (1.11.0)
 
-All 12 phases have a real implementation, and **every active rule (94 of
-94) has a real validator** -- nothing falls through to `NOT_SUPPORTED` any
-more except the two honest cases below.
+All 12 phases have a real implementation, and **every active rule has a
+real validator** -- nothing falls through to `NOT_SUPPORTED` any more except
+the two honest cases below.
+
+- **Carbon front end** (1.11.0): the web app rewritten in Angular with
+  Carbon, Mind's design system. Main screen = one workbook, three buttons
+  that do the work on their own, one download; lists and manual work under
+  Advanced. See `MindReadyUI/`.
+
+- **Mind loop** (1.10.0): on the Model map screen, the macro's run loop as
+  Mind formulas -- `MM_LOOP` in every driver cell over its column of the
+  table (or the list, or the count), `MM_RESULT` row by row in the block the
+  macro writes per pass -- previewed with its bounds and name, then written
+  through Excel as a new version. What the two functions cannot say is
+  listed as not built, with why. `scripts/check_loop_plan.py` proves the
+  wiring in Excel against the macro (a client model: 60 of 60 cells the same).
+
+- **Model map** (1.9.0): a screen (and `GET .../model-map`, `python -m
+  app.model_map`) that says where a model's inputs are, which cell the run
+  loop sets and what bounds it, which settings stay for a run but change
+  between runs and how they are toggled, and where the outputs land -- read
+  off the macros, names, dropdowns, sheet names and formulas, each line with
+  its evidence. Checked on four client models.
+
+- **Two more client models in Mind** (1.8.12): one, without inserted title rows,
+  agrees with Mind (5,043 lines, all comparison artefacts). The other converts
+  and runs once FRM-009 follows defined names into a lookup that lands on an
+  empty cell (a switch tested with `=0` was FALSE in Mind), and FRM-012 freezes
+  a one-cell array formula.
+
+- **A client model agrees with Mind** (1.8.11): the prepared model converts and runs in
+  Mind with no real difference left. FRM-008 also guards `IF(ISNUMBER(X),X,"")`
+  and `IF(ISERROR(X),"",X)` on a `""` cell (test workbook 7); a lone text cell
+  that feeds INDIRECT's sheet name made Mind read the formula's own sheet
+  (STR-008's title fixes it).
+
+- **A `""` cell inside a range** (1.8.10): FRM-008 also guards array
+  arithmetic (`IFERROR(SUMPRODUCT(row*weights),"")`) whose range holds a
+  `""` cell, naming the cells one by one -- no range test tells `""` from a
+  number in Mind (test workbook 6); that model's last 8 real differences.
+
+- **Lone text cells** (1.8.8): a text cell standing alone that formulas read
+  gets a `#` title above it (STR-008) -- Mind imports no loose text cell; a client model's
+  20,000 differences came from one such cell.
+
+- **Uploads to Mind by itself** (1.8.7): `scripts/mind_upload.py` converts and
+  runs a workbook in a sandbox project and reads Mind's errors and its
+  Deterministic Differences; `scripts/mind_log_table.py` tabulates them.
+  **FRM-012**: a formula that asks Excel about itself (`CELL("filename")`,
+  `INFO`) is frozen to what it shows.
+
+- **External links frozen** (1.8.6): a formula that reads another workbook
+  gets the copy Excel kept of that cell, and the link is broken (REF-002) --
+  a client model's 20,934 such formulas were every one an error in Mind.
+
+- **INDIRECT used as a value** (1.8.4): the Prep action writes the direct
+  reference the finding worked out (FRM-007), that model's last blocker.
+
+- **Three more fixes done by Prep** (1.8.3): 3-D references written out sheet
+  by sheet (FRM-006), the header row extended over array formulas wider than
+  their grid (RSK-002), and a name that does not exist replaced by NA()
+  (REF-001) -- the three findings on which Mind refused two client models after
+  1.8.2. Excel's values stay the same; "Check the numbers" proves it.
+
+- **Same numbers in Mind as in Excel** (1.8.1): two rules for formulas that
+  recalculate clean in Excel and still come out different in Mind -- found by
+  uploading a client model, each confirmed in Mind with a small test workbook
+  (`docs/MIND_VS_EXCEL.md`). **FRM-008**: arithmetic on a cell that holds `""`
+  inside IFERROR (Excel returns the fallback, Mind computes a number).
+  **FRM-009**: a number compared with an empty cell, directly or through a
+  reference / VLOOKUP that lands on one (0 in Excel, not 0 in Mind). Each has
+  a Prep action that rewrites the formulas without changing Excel's values;
+  after both, Mind reported no difference for that model. **FRM-010** (1.8.2): an
+  exact lookup whose key holds `""` over a table Prep gave a title -- Mind
+  matches the empty header cell; same action.
+
+- **Fix all automatically** (1.8.0): one button on the Recalculate screen and
+  the app goes through the formula errors by itself (`app/autofix.py`,
+  `POST /api/sessions/{id}/auto-fix`). In one Excel session it finds the
+  cells where errors *start*, gives each a value to fall back on
+  (`=IFERROR(<formula>, 0)` -- the assistant says which value fits and why),
+  recalculates, and **undoes any fix that changed a value that was good**;
+  what cannot be fixed that way stays, listed for a person with the reason.
+  The manual Fix panel is unchanged. On four client models: two (721 and 511
+  errors) come out clean with no good value changed, one has no error to
+  begin with, and the fourth (65,883 errors from a dead external link) goes
+  down to the 887 its own formulas hide on purpose, and comes out clean when
+  the owner's rule is lifted for it.
+
+- **The numbers check** (1.8.0): *did the preparation change what the model
+  computes?* `app/numbers_check.py` recalculates the original and the current
+  version and compares every formula cell through the rows Prep inserted
+  (`POST /api/sessions/{id}/numbers-check`, "Check the numbers" on the Prep
+  screen, `scripts/compare_versions.py`). It exists because an ordinary Prep
+  changed 2,462 computed values on one test model: title rows inserted on
+  sheets that a 3-D reference (`=SUM('Line 1:>>'!K65)`) or an INDIRECT address
+  reads by position. Prep now refuses those inserts and says why.
+
+- **Theme colours in seconds** (1.8.0): "Replace theme colours with explicit
+  RGB" (FMT-002) is done in the workbook's style table (`app/theme_colors.py`)
+  instead of cell by cell in Excel. It used to take an hour for one sheet of a
+  large model and come back at every Prep round; it now takes under ten
+  seconds for the whole workbook, once, with the exact RGB Excel shows.
+
+- **Recalculate on a model full of errors** (1.8.0): the recalculation no
+  longer asks Excel about each error cell (three calls a cell, twice). The
+  first Recalculate of a model with 65,883 error cells took about 25 minutes;
+  it takes a few minutes now.
+
+- **One verdict** (1.7.2): every analysis, apply and recalculation answers
+  *is this version acceptable by Mind?* -- `blocked` (a REQUIRED rule fails),
+  `unverified` (nothing blocks, no clean Excel recalculation of this version
+  yet) or `ready` -- with what stands in the way and the next step
+  (`app/readiness.py`, `GET /api/sessions/{id}/readiness`). Findings carry
+  their rule's priority and Prep actions a `level`: **blocking** (Mind
+  refuses the file without it) or **optional** (Mind reads the file as it
+  is). A Prep gauge tracks the planned repairs per version and flags a
+  stalled run.
+
+- **Assistant speed** (1.7.2): the assistant runs on `claude-sonnet-5`
+  (`ai_gateway.model` in settings.yaml; env `MIND_READY_MODEL` overrides) at `effort: low` (env
+  `MIND_READY_EFFORT`; Sonnet 5's default thinking made answers slow and cut
+  them off) and its replies stream -- the web app
+  shows the text as it is written, with a status line during lookups and
+  proposal repairs (`POST /api/sessions/{id}/chat/stream`, NDJSON;
+  `MIND_READY_STREAM=0` turns streaming off).
 
 - **Large workbooks** (1.6.6): every upload is first inspected from the zip
   package alone (`app/sizing.py` -- size on disk, *decompressed* size, and
@@ -39,7 +162,7 @@ more except the two honest cases below.
   every output untouched. While a scan runs, a **status indicator** shows
   the stage (convert / copy / read sheet i of N / scan sheet i of N / names /
   rule i of M / report / plan), overall progress and elapsed time -- web app
-  via `GET /api/sessions/{id}/status`, Streamlit via `st.status`.
+  via `GET /api/sessions/{id}/status`.
 
 - **Analysis & validation**: `app/inventory.py` (single-pass, openpyxl +
   zipfile, no execution of VBA/links) + `app/grids.py` (Mind's documented
@@ -91,11 +214,13 @@ more except the two honest cases below.
   (Summary + Findings) is always produced as well. JSON
   (`scripts/validate_workbook.py`) is still available for scripting.
 - **Recalculation** (real): `scripts/recalculate_workbook.py` / `app/recalc.py`
-  drives your installed Excel via COM. **On a machine without the
-  MMForExcel add-in installed, every `MM_` function call will show
-  `#NAME?`** -- the adapter detects this and reports `NOT_SUPPORTED` with an
-  explanation rather than a false `ERROR`. It's a deliberate, separate step
-  (not run automatically during analysis).
+  drives your installed Excel via COM, with the MM for Excel add-in loaded
+  into it (1.10.1: automation-started Excel never loads startup add-ins by
+  itself, so the app registers the XLL; `mm_for_excel_addin` in settings.yaml
+  names another path, env `MINDREADY_MM_XLL` overrides both or turns it off). **On a machine without the add-in, every `MM_`
+  function call shows `#NAME?`** -- the adapter detects this and reports
+  `NOT_SUPPORTED` with an explanation rather than a false `ERROR`. It's a
+  deliberate, separate step (not run automatically during analysis).
 - **Auto-fix** (narrow, real): `app/change_apply.py` -- `.xlsb`/format
   conversion and loop-name case normalization (LOOP-002), both written by
   Excel and verified to open; everything else the rules flag needs a human
@@ -119,22 +244,18 @@ more except the two honest cases below.
   up cells it hasn't seen). Ask questions, or tell it to change anything:
   it proposes the exact operations, you click Apply, Excel writes them to
   a fresh copy, the file is verified and re-analyzed, and the conversation
-  continues on the changed workbook. Needs the shared gateway key
-  (secret.key / config.enc).
+  continues on the changed workbook. Needs the gateway key, pasted once
+  in the web app (saved encrypted for the Windows user, `app/ai_key.py`).
 - **Web app** (1.6.0): the Figma-built React front-end in
-  `../FigmaOutput` served by `app/web/server.py` (FastAPI) --
-  `run_mind_ready_web.bat` -> http://localhost:8600. Same engine, same
-  guarantees, plus a per-session version lineage (every apply is a new
-  Excel-verified file with its change log), a "since the previous
-  analysis" delta after every apply, and a Fix panel on every finding and on every
-  recalculation error (quick fixes + focused mini chat, recalculate to
-  confirm; errors sharing one root cause are fixed together). Build the front-end once with
-  `npm install && npm run build` in `FigmaOutput`.
-- **UI**: `run_excel_upload_prep.bat` launches `app/ui/streamlit_app.py`:
-  sidebar (upload, mode, run, current-file card) and sections Findings /
-  Prep workbook / Ask the assistant / Recalculate / Reports (report
-  downloads carry a visible "verified to open in Excel" line). Verified
-  end-to-end with Playwright on a real 13.7 MB `.xlsm`.
+  `../MindReadyUI` served by `app/web/server.py` (FastAPI) -- an Angular 22 +
+  Carbon app with Mind's own look (1.11.0; the React app in `FigmaOutput` is
+  retired, `MIND_READY_DIST` can still point at its `dist`). The main screen
+  is three one-click buttons (Fix all issues, Fix the formulas, Build the
+  Mind loop) and a download; everything else -- findings, Prep actions,
+  Recalculate, Mind loop choices, Model map, Grid Namer, Assistant, Run in
+  Mind, Deliver, Versions -- is under **Advanced**. The built `dist` is
+  committed; rebuild with `npm install && npx ng build --configuration
+  production` in `MindReadyUI`.
 
 Still honestly `NOT_SUPPORTED`: `READY-001` until a real recalculation has
 been run (`FORMULA-001`, which could never pass, was removed in 1.6.4). `PASS` still requires a clean, real
@@ -142,9 +263,10 @@ recalculation -- it's not handed out for free, and on a machine without
 MMForExcel installed it will only ever be `NOT_SUPPORTED`, `WARNING`, or
 `ERROR`, never a false `PASS`.
 
-Setup: `pip install -r requirements.txt`, then `python -m pytest tests/unit`
-(146 tests; the Excel-backed ones skip without Excel).
-Run the UI: `run_excel_upload_prep.bat` (or `streamlit run app/ui/streamlit_app.py`).
+Setup: `pip install -r requirements.txt` to run the app; `pip install -r requirements-dev.txt`
+for the tests, then `python -m pytest tests` (the Excel-backed ones skip without Excel).
+Run the app: `run_mind_ready_web.bat`. Settings (port, data folder, AI gateway, Mind addresses, sandbox
+folder and project prefix, MM for Excel add-in): `settings.yaml`; the AI key is pasted in the app.
 
 ## Implementation note
 
@@ -153,5 +275,5 @@ Rules are mined from `01_Mind_Readiness_Standard.md` and
 and `tools/mine_function_registry.py`, and the KB references from
 `CompleteMindDocn.docx` via `tools/mine_kb_docx.py` -- deterministic parsers,
 safe to re-run against updated source docs. `rules/kb-rules.yaml` is the one
-hand-authored rule file (8 rules citing their KB articles). See CHANGELOG.md for what's implemented
-vs. registered-but-`NOT_SUPPORTED`.
+hand-authored rule file (8 rules citing their KB articles). CHANGELOG.md lists the changes between
+versions.

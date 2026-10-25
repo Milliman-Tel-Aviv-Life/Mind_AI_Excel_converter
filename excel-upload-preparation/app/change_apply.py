@@ -1,7 +1,7 @@
-"""Real change-set application (CLAUDE_CODE_PROMPT.md phase 8), scoped to
+"""Real change-set application, scoped to
 the handful of rules the mined rule set itself marks as safe to
-auto-correct (see CHANGELOG.md -- almost everything else needs a human
-judgment call by the rules' own design). Every apply function:
+auto-correct (almost everything else needs a human judgment call by the
+rules' own design). Every apply function:
 
   * works on a **fresh copy**, never the file it was handed directly
     in place without a hash check first (non-negotiable rule #1);
@@ -10,7 +10,7 @@ judgment call by the rules' own design). Every apply function:
   * never claims recalculation succeeded -- call app.recalc.recalculate()
     separately afterward (see app/modes -- VERIFY is a distinct step).
 
-1.3.0: cell edits are written by **Excel through COM** whenever Excel is
+Cell edits are written by **Excel through COM** whenever Excel is
 available (`Range.Formula` / `Range.FormulaArray` on the copy, then Save).
 A pure-Python (openpyxl) save drops package parts it doesn't model and the
 result can fail to open in Excel -- see app/excel_com.py. The openpyxl path
@@ -31,7 +31,7 @@ from typing import Any
 
 import openpyxl
 
-from .excel_com import FILE_FORMAT_CODES, close_quietly, com_available, excel_session, open_workbook, verify_opens_in_excel
+from .excel_com import FILE_FORMAT_CODES, close_quietly, com_available, excel_session, open_for_write, open_workbook, save_in_place, verify_opens_in_excel
 from .inventory import loop_definitions, make_immutable_copy, sha256_of
 
 
@@ -102,7 +102,7 @@ def apply_formula_edits(copy_path: Path, edits: list[dict[str, Any]], prefer_exc
         def _edit(excel: Any) -> None:
             wb = None
             try:
-                wb = open_workbook(excel, copy_path, read_only=False)
+                wb = open_for_write(excel, copy_path)
                 for edit in edits:
                     rng = None
                     try:
@@ -116,7 +116,7 @@ def apply_formula_edits(copy_path: Path, edits: list[dict[str, Any]], prefer_exc
                         failed.append({**edit, "error": str(exc)[:200]})
                     finally:
                         rng = None
-                wb.Save()
+                save_in_place(wb, copy_path)
             finally:
                 close_quietly(wb)
 

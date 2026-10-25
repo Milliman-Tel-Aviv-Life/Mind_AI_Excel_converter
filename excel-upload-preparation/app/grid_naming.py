@@ -1,4 +1,4 @@
-"""Context-aware grid names from the Milliman APIM Claude gateway (1.6.7).
+"""Context-aware grid names from the Milliman APIM Claude gateway.
 
 Why this exists
 ---------------
@@ -11,7 +11,7 @@ it in the template list and nobody can tell what the grid holds.
 
 This module asks the model to read the same surroundings and propose a short
 name, in ONE batched call for the whole workbook. It is advisory in exactly the
-way SKILL.md requires:
+way every assistant feature of the app is:
 
   * it never writes anything -- it returns names, and the ordinary prep plan
     (`prep.plan_create_grid_titles`) turns them into reviewable operations the

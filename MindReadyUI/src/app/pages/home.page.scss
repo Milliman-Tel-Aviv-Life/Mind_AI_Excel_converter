@@ -1,0 +1,352 @@
+@use "@carbon/styles/scss/theme" as theme;
+@use "@carbon/styles/scss/type" as type;
+@use "@carbon/styles/scss/spacing" as *;
+
+.page {
+  max-width: 64rem;
+  margin: 0 auto;
+  padding: $spacing-07 $spacing-05 $spacing-09;
+}
+
+.page-title {
+  @include type.type-style("heading-04");
+  margin-bottom: $spacing-03;
+}
+
+.page-lead {
+  @include type.type-style("body-02");
+  color: theme.$text-secondary;
+  margin-bottom: $spacing-07;
+}
+
+.drop {
+  border: 1px dashed theme.$border-strong-01;
+  background: theme.$layer-01;
+  padding: $spacing-09 $spacing-07;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: $spacing-05;
+  margin-bottom: $spacing-05;
+
+  &--over {
+    border-color: theme.$interactive;
+    background: theme.$layer-hover-01;
+  }
+
+  &__text {
+    @include type.type-style("body-02");
+    color: theme.$text-secondary;
+  }
+
+  &__button {
+    cursor: pointer;
+  }
+}
+
+.trust {
+  @include type.type-style("helper-text-01");
+  color: theme.$text-helper;
+  margin-top: $spacing-05;
+}
+
+.file {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: $spacing-05;
+  margin-bottom: $spacing-05;
+
+  &__meta {
+    @include type.type-style("body-compact-01");
+    color: theme.$text-secondary;
+  }
+
+  &__actions {
+    display: flex;
+    gap: $spacing-03;
+    flex-shrink: 0;
+  }
+}
+
+.actions {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: $spacing-05;
+  margin-top: $spacing-06;
+}
+
+.action {
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-03;
+  min-height: 16rem;
+
+  &__title {
+    @include type.type-style("heading-03");
+  }
+
+  &__text {
+    @include type.type-style("body-compact-01");
+    color: theme.$text-secondary;
+    flex: 1;
+  }
+
+  &__fact {
+    @include type.type-style("label-01");
+    color: theme.$text-helper;
+  }
+
+  &__row {
+    margin-top: $spacing-02;
+  }
+
+  &__progress {
+    margin-top: $spacing-03;
+  }
+
+  &__result {
+    margin-top: $spacing-03;
+    padding: $spacing-03 $spacing-04;
+    border-left: 3px solid theme.$border-subtle-01;
+    background: theme.$layer-02;
+    display: flex;
+    flex-direction: column;
+    gap: $spacing-01;
+    @include type.type-style("body-compact-01");
+
+    &--ok {
+      border-left-color: theme.$support-success;
+    }
+
+    &--warn {
+      border-left-color: theme.$support-warning;
+    }
+
+    &--error {
+      border-left-color: theme.$support-error;
+    }
+
+    span {
+      color: theme.$text-secondary;
+    }
+  }
+}
+
+.advanced-link {
+  @include type.type-style("body-compact-01");
+  color: theme.$text-secondary;
+  margin-top: $spacing-07;
+}
+
+.sheets {
+  width: 100%;
+  border-collapse: collapse;
+  background: theme.$layer-01;
+  margin-bottom: $spacing-05;
+  @include type.type-style("body-compact-01");
+
+  th,
+  td {
+    text-align: left;
+    padding: $spacing-03 $spacing-04;
+    border-bottom: 1px solid theme.$border-subtle-01;
+  }
+
+  th {
+    @include type.type-style("heading-compact-01");
+    background: theme.$layer-accent-01;
+  }
+}
+
+.mono {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.75rem;
+}
+
+.share {
+  width: 8rem;
+  height: 0.5rem;
+  background: theme.$layer-accent-01;
+
+  &__bar {
+    height: 100%;
+    background: theme.$interactive;
+  }
+}
+
+.action__done {
+  display: flex;
+  align-items: center;
+  gap: $spacing-03;
+  margin-top: $spacing-03;
+  @include type.type-style("body-compact-01");
+}
+
+.dot {
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
+  background: theme.$border-subtle-01;
+
+  &--ok {
+    background: theme.$support-success;
+  }
+
+  &--warn {
+    background: theme.$support-warning;
+  }
+
+  &--error {
+    background: theme.$support-error;
+  }
+}
+
+.link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: theme.$link-primary;
+  cursor: pointer;
+  font: inherit;
+  @include type.type-style("body-compact-01");
+}
+
+.scan {
+  max-width: 36rem;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-03;
+
+  &__rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: $spacing-02;
+  }
+
+  &__row {
+    display: flex;
+    gap: $spacing-04;
+    align-items: baseline;
+    @include type.type-style("body-compact-01");
+    color: theme.$text-helper;
+
+    &--done {
+      color: theme.$text-secondary;
+    }
+
+    &--current {
+      color: theme.$text-primary;
+      font-weight: 600;
+    }
+  }
+
+  &__mark {
+    width: 1.1rem;
+    flex-shrink: 0;
+    text-align: center;
+  }
+
+  &__secs {
+    @include type.type-style("label-01");
+    color: theme.$text-helper;
+    font-weight: 400;
+  }
+
+  &__msg {
+    @include type.type-style("label-01");
+    color: theme.$text-secondary;
+    font-weight: 400;
+  }
+}
+
+.chain {
+  background: theme.$layer-01;
+  padding: $spacing-05;
+  margin-top: $spacing-06;
+  display: flex;
+  flex-direction: column;
+  gap: $spacing-04;
+
+  &__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: $spacing-05;
+    flex-wrap: wrap;
+  }
+
+  &__title {
+    @include type.type-style("heading-03");
+  }
+
+  &__text {
+    @include type.type-style("body-compact-01");
+    color: theme.$text-secondary;
+  }
+
+  &__steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: $spacing-03;
+  }
+
+  &__step {
+    display: flex;
+    flex-direction: column;
+    gap: $spacing-02;
+    padding-left: $spacing-05;
+    border-left: 3px solid theme.$border-subtle-01;
+    @include type.type-style("body-compact-01");
+
+    &--running {
+      border-left-color: theme.$interactive;
+    }
+
+    &--done {
+      border-left-color: theme.$support-success;
+    }
+
+    &--failed {
+      border-left-color: theme.$support-error;
+    }
+
+    &--skipped {
+      border-left-color: theme.$border-subtle-01;
+      color: theme.$text-helper;
+    }
+  }
+
+  &__label {
+    display: flex;
+    gap: $spacing-03;
+    align-items: center;
+    font-weight: 600;
+  }
+
+  &__check {
+    @include type.type-style("label-01");
+    color: theme.$text-helper;
+  }
+
+  &__line {
+    color: theme.$text-secondary;
+  }
+
+  &__estimate {
+    @include type.type-style("body-compact-01");
+    margin-top: $spacing-03;
+  }
+
+  &__caveat {
+    @include type.type-style("label-01");
+    color: theme.$text-helper;
+  }
+}

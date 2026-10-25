@@ -3,14 +3,21 @@ import { useStore } from "../store";
 import * as api from "../services/api";
 import type { FixTarget, RecalcGroup } from "../types";
 import StatusPill from "../components/StatusPill";
+import AutoFixPanel from "../components/AutoFixPanel";
+
+/** A table of 65,000 error rows freezes the page; the groups above it and the automatic fixer cover the rest. */
+const MAX_ERROR_ROWS = 300;
 
 export default function RecalculateScreen() {
   const sessionId = useStore((s) => s.sessionId);
   const currentVersion = useStore((s) => s.currentVersion);
   const result = useStore((s) => s.recalcResult);
   const setRecalcResult = useStore((s) => s.setRecalcResult);
+  const addVersion = useStore((s) => s.addVersion);
+  const setReport = useStore((s) => s.setReport);
   const openFix = useStore((s) => s.openFix);
   const [running, setRunning] = useState(false);
+  const [fixing, setFixing] = useState(false); // the automatic fixer is at work: no recalculation meanwhile
   const [error, setError] = useState<string | null>(null);
 
   const groups: RecalcGroup[] = result?.groups ?? [];
@@ -32,6 +39,8 @@ export default function RecalculateScreen() {
     setError(null);
     try {
       const res = await api.recalculate(sessionId!);
+      if (res.version) addVersion(res.version);
+      if (res.report) setReport(res.report, res.plan ?? useStore.getState().plan);
       setRecalcResult(res);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -58,12 +67,12 @@ export default function RecalculateScreen() {
       <p className="text-[13px] text-[#6B7280] mb-6 max-w-xl">
         Drives the installed Excel (hidden, macros disabled) to recalculate a fresh copy and scan for
         formula errors. This is the only path to a confirmed PASS status. Every error has a Fix button;
-        errors that share one root cause can be fixed together.
+        errors that share one root cause can be fixed together — or let the app fix them all by itself.
       </p>
 
       <button
         onClick={recalc}
-        disabled={running}
+        disabled={running || fixing}
         className="px-6 py-3 bg-[#1F3A5F] text-white rounded-lg font-semibold text-sm hover:bg-[#162d4a] transition-colors disabled:opacity-50 flex items-center gap-2"
         aria-label="Recalculate now"
       >
@@ -83,6 +92,8 @@ export default function RecalculateScreen() {
           {error}
         </div>
       )}
+
+      <AutoFixPanel blocked={running} onRunningChange={setFixing} />
 
       {result && (
         <div className="mt-6 border border-[#E5E7EB] rounded-xl bg-white overflow-hidden" aria-live="polite">
@@ -110,7 +121,7 @@ export default function RecalculateScreen() {
             <div className="px-5 pt-5">
               <div className="text-[11px] font-semibold text-[#9CA3AF] tracking-wider mb-2">SHARED ROOT CAUSES — FIX ALL AT ONCE</div>
               <div className="flex flex-col gap-2">
-                {shared.map((g) => (
+                {shared.slice(0, MAX_ERROR_ROWS).map((g) => (
                   <div key={g.id} className={`border rounded-lg p-3 flex items-start gap-3 ${g.kind === "addin_gap" ? "border-[#8A5A00]/30 bg-[#FFF1CC]/40" : "border-[#1F3A5F]/30 bg-[#EEF2FF]"}`}>
                     <div className="flex-1 min-w-0">
                       <div className="text-[13px] text-[#111827]">
@@ -149,7 +160,7 @@ export default function RecalculateScreen() {
                     </tr>
                   </thead>
                   <tbody>
-                    {result.formula_errors.map((e, i) => {
+                    {result.formula_errors.slice(0, MAX_ERROR_ROWS).map((e, i) => {
                       const g = groupOfCell.get(`${e.sheet}!${e.cell}`);
                       return (
                         <tr key={i} className="border-b border-[#E5E7EB] last:border-0 hover:bg-[#F9FAFB]">
@@ -193,6 +204,11 @@ export default function RecalculateScreen() {
                   </tbody>
                 </table>
               </div>
+              {result.formula_errors.length > MAX_ERROR_ROWS && (
+                <p className="mt-2 text-[12px] text-[#6B7280]">
+                  Showing the first {MAX_ERROR_ROWS} of {result.formula_errors.length.toLocaleString()} error cells. The shared root causes above cover them in groups, and "Fix all automatically" goes through every one.
+                </p>
+              )}
             </div>
           )}
 

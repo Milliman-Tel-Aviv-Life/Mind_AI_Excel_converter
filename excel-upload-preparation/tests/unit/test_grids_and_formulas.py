@@ -1,7 +1,8 @@
 """Unit tests for the pure helpers behind the 1.3.0 validators: Mind-style
 grid detection (app/grids.py) and the formula tokenizer (app/formula_utils.py).
 No workbook files needed."""
-from app.formula_utils import called_functions, cell_refs_in_formula, find_calls, parse_ref, storage_prefixes, unquote
+from app import formula_utils
+from app.formula_utils import called_functions, cell_refs_in_formula, find_calls, formula_memo, mask_strings, name_tokens, parse_ref, storage_prefixes, unquote
 from app.grids import detect_grids, looks_like_title, parse_flags, parse_title
 
 
@@ -87,3 +88,36 @@ def test_a_data_table_holding_error_values_stays_one_grid():
     # the '#N/A' in the middle is data, so nothing is "trapped" and no row
     # insert will ever be proposed to free it
     assert grid["inner_title_cells"] == []
+
+
+def test_range_length_keeps_quoted_sheet_names():
+    """1.10.2: `'Policy Data'!A2:A6` is 5 cells, not unresolvable (LOOP-003 flagged every
+    Mind-loop version of UC-1 as needing a decision)."""
+    from app.formula_utils import range_length
+
+    assert range_length("'Policy Data'!A2:A6") == 5
+    assert range_length("'Policy Data'!$AP$1:$AP$6") == 6
+    assert range_length("Sheet1!A1:A3") == 3 and range_length("A1") == 1
+    assert range_length("MyName") is None and range_length("") is None and range_length("A1:A5+0") is None
+
+
+def test_the_formula_memo_gives_the_same_answers_and_hands_out_fresh_copies():
+    """1.11.10: inside formula_memo() each formula is parsed once; the answers are the ones
+    without it, a caller changing what it got changes nothing, and the memo ends with the scan."""
+    formulas = ["=SUM(Sheet1!A1:B2,C3)+'My Sheet'!D4+Rate", '=IF(A1="x!B2",VLOOKUP(A1,$A:$B,2,0),1:3)', "=A1", "plain"]
+
+    def answers():
+        return [(cell_refs_in_formula(f), called_functions(f), name_tokens(f), mask_strings(f), mask_strings(f, False)) for f in formulas]
+
+    plain = answers()
+    with formula_memo():
+        first = answers()
+        first[0][0][0]["sheet"] = "changed"
+        first[0][1].append("CHANGED")
+        first[0][2].clear()
+        with formula_memo():  # nested scans share it
+            again = answers()
+        assert formula_utils._MEMO is not None
+    assert formula_utils._MEMO is None
+    assert again == plain and answers() == plain
+

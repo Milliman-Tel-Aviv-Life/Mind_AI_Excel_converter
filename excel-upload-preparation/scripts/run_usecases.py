@@ -1,0 +1,312 @@
+"""Drive the running web app through the whole flow for one or more workbooks,
+exactly as a user would with the buttons:
+
+    upload -> standard Prep (the actions that are on by default, repeated while
+    Prep still plans something) -> Recalculate -> Fix all automatically ->
+    Recalculate again (the independent confirmation)
+
+    python scripts/run_usecases.py --base http://127.0.0.1:8601 --out <dir> a.xlsm b.xlsm
+    python scripts/run_usecases.py --ports 8601,8602 --out <dir> a.xlsm b.xlsm c.xlsm
+
+With --ports the script starts a fresh server of its own for every workbook
+(one per port, so as many workbooks run side by side as there are ports) and
+stops it afterwards: a session keeps its analysis in memory, and four large
+workbooks in one server process do not fit.
+
+A very large workbook is uploaded the way the upload screen offers: when it
+unpacks to --skip-above-mb or more (default 100 MB), a sheet that alone holds
+--skip-share of it (default 50 % -- a data dump or an output table) is left out
+of the *scan*. The workbook itself stays whole: Prep, the recalculation and the
+automatic fixer work on all of it.
+
+Writes <out>/<stem>/result.json (every step, timings, error counts), the final
+workbook, and <out>/summary.json. Nothing is uploaded anywhere but the local app.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import queue
+import subprocess
+import sys
+import threading
+import time
+
+for _stream in (sys.stdout, sys.stderr):  # the fixer's messages hold arrows; a redirected console is cp1252 on Windows
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+from pathlib import Path
+from typing import Any
+
+import requests
+
+LONG = 6 * 3600  # one call on a 40 MB workbook can take many minutes
+
+
+def _post(base: str, path: str, **kw: Any) -> dict[str, Any]:
+    r = requests.post(base + path, timeout=LONG, **kw)
+    if r.status_code >= 400:
+        raise RuntimeError(f"POST {path} -> {r.status_code}: {r.text[:500]}")
+    return r.json()
+
+
+def _get(base: str, path: str) -> dict[str, Any]:
+    r = requests.get(base + path, timeout=600)
+    if r.status_code >= 400:
+        raise RuntimeError(f"GET {path} -> {r.status_code}: {r.text[:500]}")
+    return r.json()
+
+
+SKIP_ACTIONS: set[str] = set()  # --skip-actions: actions left unticked, as a user would
+
+
+def _default_ops(plan: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """What the Prep screen sends when the user presses Apply without touching a checkbox."""
+    chosen = [a for a in plan if a.get("default_on") and a.get("count", 0) > 0 and a["id"] not in SKIP_ACTIONS]
+    return [o for a in chosen for o in a["operations"]], {a["id"]: a["count"] for a in chosen}
+
+
+def _recalc_facts(rec: dict[str, Any]) -> dict[str, Any]:
+    by_error: dict[str, int] = {}
+    for e in rec.get("formula_errors", []):
+        by_error[e.get("error", "?")] = by_error.get(e.get("error", "?"), 0) + 1
+    return {
+        "status": rec.get("status"), "ran": rec.get("ran"), "version_id": rec.get("version_id"),
+        "formula_errors": len(rec.get("formula_errors", [])), "addin_gap_errors": len(rec.get("addin_gap_errors", [])),
+        "by_error": by_error, "groups": len(rec.get("groups", [])), "message": str(rec.get("message", ""))[:300],
+    }
+
+
+def flow(base: str, workbook: Path, out_dir: Path, prep_rounds: int, autofix: bool, autofix_options: dict[str, Any], skip_share: float = 0.5, skip_above_mb: float = 100.0, one_comparison: bool = False) -> dict[str, Any]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    t0 = time.time()
+    result: dict[str, Any] = {"workbook": str(workbook), "size_mb": round(workbook.stat().st_size / 1e6, 1), "base": base, "steps": [], "started": time.strftime("%Y-%m-%d %H:%M:%S")}
+
+    def step(name: str, started: float, **facts: Any) -> None:
+        entry = {"step": name, "seconds": round(time.time() - started, 1), **facts}
+        result["steps"].append(entry)
+        print(f"[{workbook.stem}] {name}: " + json.dumps({k: v for k, v in entry.items() if k != 'step'}, ensure_ascii=False)[:600], flush=True)
+        (out_dir / "result.json").write_text(json.dumps(result, indent=1, ensure_ascii=False), encoding="utf-8")
+
+    try:
+        result["app"] = _get(base, "/api/health")
+        t = time.time()
+        with workbook.open("rb") as f:
+            body = _post(base, "/api/sessions", files={"file": (workbook.name, f, "application/octet-stream")}, data={"mode": "plan", "defer": "1"})
+        sid = body["sessionId"]
+        result["session"] = sid
+        size = body.get("size") or {}
+        skipped = [sh["name"] for sh in size.get("sheets", []) if (size.get("decompressed_mb") or 0) >= skip_above_mb and (sh.get("share") or 0) >= skip_share]
+        body = _post(base, f"/api/sessions/{sid}/analyze", json={"ignore_sheets": skipped})
+        plan = body["plan"]
+        step("upload+analyze", t, unpacked_mb=size.get("decompressed_mb"), above_size_limit=size.get("above_threshold"), sheets_left_out_of_the_scan=skipped,
+             report_status=body["report"]["status"], status_counts=body["report"]["summary"]["status_counts"],
+             readiness=(body.get("readiness") or {}).get("state"), blocking=(body.get("readiness") or {}).get("blocking_count"))
+
+        previous = None
+        for n in range(1, prep_rounds + 1):
+            ops, by_action = _default_ops(plan)
+            if not ops:
+                break
+            if previous is not None and len(ops) >= previous:
+                step(f"prep round {n} skipped", time.time(), reason=f"Prep still plans {len(ops)} change(s), no fewer than before ({previous}): stalled", planned=by_action)
+                break
+            previous = len(ops)
+            t = time.time()
+            out = _post(base, f"/api/sessions/{sid}/apply", json={"operations": ops, "reanalyze": True})
+            plan = out.get("plan", plan)
+            res = out["result"]
+            step(f"prep round {n}", t, sent=len(ops), by_action=by_action, applied=len(res.get("applied", [])), failed=len(res.get("failed", [])),
+                 failed_sample=[f"{f.get('sheet')}!{f.get('cell') or f.get('range') or ''}: {str(f.get('error'))[:160]}" for f in res.get("failed", [])[:5]],
+                 version=out["version"]["label"], verified=res.get("verified_opens_in_excel"),
+                 readiness=(out.get("readiness") or {}).get("state"), blocking=(out.get("readiness") or {}).get("blocking_count"))
+
+        def numbers_step(numbers: dict[str, Any], started: float, by: str) -> None:
+            result["prep_changed_values"] = None if not numbers.get("ran") else not numbers.get("clean")
+            step(f"numbers check ({by})", started, ran=numbers.get("ran"), clean=numbers.get("clean"), verdict=numbers.get("verdict"), counts=numbers.get("counts"),
+                 moves=numbers.get("moves"), by_sheet=numbers.get("by_sheet"), examples={k: v[:4] for k, v in (numbers.get("samples") or {}).items() if v})
+
+        # The fixer compares a prepared version with the original itself (an error that was a value
+        # in the original is Prep's doing). `one_comparison` uses that one instead of asking twice:
+        # on a 37 MB model each comparison is two full recalculations.
+        if not one_comparison:
+            t = time.time()
+            numbers_step(_post(base, f"/api/sessions/{sid}/numbers-check"), t, "original vs prepared")
+
+        t = time.time()
+        rec = _post(base, f"/api/sessions/{sid}/recalculate")
+        step("recalculate", t, **_recalc_facts(rec))
+        result["errors_before_autofix"] = len(rec.get("formula_errors", []))
+
+        if one_comparison and not (autofix and rec.get("formula_errors")):
+            t = time.time()
+            numbers_step(_post(base, f"/api/sessions/{sid}/numbers-check"), t, "original vs prepared")
+
+        if autofix and rec.get("formula_errors"):
+            t = time.time()
+            _post(base, f"/api/sessions/{sid}/auto-fix", json=autofix_options)
+            last = ""
+            while True:
+                time.sleep(3)
+                st = _get(base, f"/api/sessions/{sid}/auto-fix")
+                line = f"{st.get('state')} | {st.get('title') or ''} | {st.get('message') or ''}"
+                if line != last:
+                    print(f"[{workbook.stem}]   auto-fix: {line[:220]}", flush=True)
+                    last = line
+                if st.get("state") in ("done", "error", "idle"):
+                    break
+            fixed_plan: list[dict[str, Any]] = []
+            if st.get("state") == "done":
+                # the whole result: every kind of fix with its reason, what is left and why (not the recalculation / analysis payloads)
+                whole = _get(base, f"/api/sessions/{sid}/auto-fix?full=1")
+                fixed_plan = (whole.get("analysis") or {}).get("plan") or []
+                st = {k: v for k, v in whole.items() if k not in ("recalc", "analysis")}
+            fix = st.get("result") or {}
+            (out_dir / "autofix_result.json").write_text(json.dumps(st, indent=1, ensure_ascii=False), encoding="utf-8")
+            if one_comparison and fix.get("numbers_check"):
+                numbers_step(fix["numbers_check"], time.time(), "by the fixer: original vs prepared")
+            step("auto-fix", t, state=st.get("state"), error=st.get("error"), status=fix.get("status"), passes=fix.get("passes"),
+                 errors_before=fix.get("errors_before"), errors_after=fix.get("errors_after"), cells_fixed=fix.get("cells_fixed"),
+                 cells_rewritten=fix.get("cells_rewritten"), left_for_a_person=fix.get("left_count"), rolled_back=fix.get("rolled_back"),
+                 broken_by_prep=fix.get("regression_cells"), good_values_changed=fix.get("good_values_changed"),
+                 by_strategy=fix.get("by_strategy"), version=(st.get("version") or {}).get("label"), summary=fix.get("summary"))
+
+            # 1.8.1: what the verdict asks for next. A fix can be a form Mind computes differently
+            # (=IFERROR(x,0) over arithmetic on "": FRM-008); the analysis of the fixed version says so
+            # and Prep rewrites it -- the blocking actions only, as the screen's next step does.
+            again = [a for a in fixed_plan if a.get("default_on") and a.get("level") == "blocking" and a.get("count", 0) > 0 and a["id"] not in SKIP_ACTIONS]
+            if again:
+                t = time.time()
+                ops = [o for a in again for o in a["operations"]]
+                out = _post(base, f"/api/sessions/{sid}/apply", json={"operations": ops, "reanalyze": True})
+                res = out["result"]
+                step("prep after the fixer", t, sent=len(ops), by_action={a["id"]: a["count"] for a in again}, applied=len(res.get("applied", [])), failed=len(res.get("failed", [])),
+                     failed_sample=[f"{f.get('sheet')}!{f.get('cell') or f.get('range') or ''}: {str(f.get('error'))[:160]}" for f in res.get("failed", [])[:5]],
+                     version=out["version"]["label"], verified=res.get("verified_opens_in_excel"),
+                     readiness=(out.get("readiness") or {}).get("state"), blocking=(out.get("readiness") or {}).get("blocking_count"))
+                t = time.time()
+                numbers = _post(base, f"/api/sessions/{sid}/numbers-check")
+                step("numbers check (after the fixer's Prep: original vs final)", t, ran=numbers.get("ran"), clean=numbers.get("clean"), verdict=numbers.get("verdict"), counts=numbers.get("counts"))
+
+            t = time.time()
+            rec = _post(base, f"/api/sessions/{sid}/recalculate")
+            step("recalculate (confirmation)", t, **_recalc_facts(rec))
+
+        result["errors_after"] = len(rec.get("formula_errors", []))
+        result["clean"] = bool(rec.get("ran")) and not rec.get("formula_errors")
+        ready = _get(base, f"/api/sessions/{sid}/readiness")
+        result["readiness"] = {k: (ready.get("readiness") or {}).get(k) for k in ("state", "headline", "blocking_count", "manual_blocking_count", "optional_count")}
+        versions = _get(base, f"/api/sessions/{sid}/versions")
+        vlist = versions if isinstance(versions, list) else versions.get("versions", [])
+        result["versions"] = [v["label"] for v in vlist]
+        if vlist:
+            final = vlist[-1]
+            r = requests.get(f"{base}/api/sessions/{sid}/files/{final['file_name']}", timeout=600)
+            if r.ok:
+                dest = out_dir / final["file_name"]
+                dest.write_bytes(r.content)
+                result["final_workbook"] = str(dest)
+        result["ok"] = True
+    except Exception as exc:  # one workbook failing must not stop the others
+        result["ok"] = False
+        result["failure"] = f"{type(exc).__name__}: {exc}"
+        print(f"[{workbook.stem}] FAILED: {result['failure'][:600]}", flush=True)
+    result["total_seconds"] = round(time.time() - t0, 1)
+    (out_dir / "result.json").write_text(json.dumps(result, indent=1, ensure_ascii=False), encoding="utf-8")
+    return result
+
+
+def _serve(port: int, log: Path) -> subprocess.Popen:
+    """A server of this app on `port`, started for one workbook."""
+    root = Path(__file__).resolve().parents[1]
+    env = {**os.environ, "MIND_READY_PORT": str(port), "PYTHONUTF8": "1"}
+    proc = subprocess.Popen([sys.executable, "-m", "app.web.server"], cwd=root, env=env, stdout=log.open("w", encoding="utf-8"), stderr=subprocess.STDOUT)
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        try:
+            if requests.get(f"http://127.0.0.1:{port}/api/health", timeout=3).ok:
+                return proc
+        except requests.RequestException:
+            time.sleep(1)
+    proc.kill()
+    raise RuntimeError(f"the server on port {port} did not answer")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("workbooks", nargs="+", type=Path)
+    ap.add_argument("--base", default="http://127.0.0.1:8600", help="a server that is already running")
+    ap.add_argument("--ports", default="", help="instead of --base: start a fresh server per workbook on these ports, e.g. 8601,8602")
+    ap.add_argument("--out", type=Path, required=True)
+    ap.add_argument("--prep-rounds", type=int, default=3)
+    ap.add_argument("--skip-share", type=float, default=0.5, help="in a very large workbook, leave a sheet out of the scan when it holds at least this share of the file")
+    ap.add_argument("--skip-above-mb", type=float, default=100.0, help="'very large': the workbook unpacks to at least this many MB")
+    ap.add_argument("--no-autofix", action="store_true", help="stop after the first recalculation (a baseline of what Prep leaves)")
+    ap.add_argument("--skip-actions", default="", help="Prep actions to leave unticked, comma-separated (e.g. create_grid_titles,separate_merged_grids: no title rows inserted)")
+    ap.add_argument("--no-assistant", action="store_true", help="auto-fix without asking the assistant (the built-in strategies only)")
+    ap.add_argument("--allow-handled", action="store_true", help="auto-fix with keep_good_values off: also fix errors a formula hides, listing every value that changes")
+    ap.add_argument("--one-comparison", action="store_true", help="compare with the original once: by the fixer when there are errors to fix, by the numbers check otherwise")
+    args = ap.parse_args()
+    SKIP_ACTIONS.update(a.strip() for a in args.skip_actions.split(",") if a.strip())
+    options = {"use_assistant": not args.no_assistant, "keep_good_values": not args.allow_handled, "time_budget_min": 240}
+    args.out.mkdir(parents=True, exist_ok=True)
+    results: dict[str, dict[str, Any]] = {}
+    lock = threading.Lock()
+
+    def save() -> None:
+        summary = [
+            {k: results[str(wb)].get(k) for k in ("workbook", "ok", "clean", "prep_changed_values", "errors_before_autofix", "errors_after", "total_seconds", "failure", "versions", "readiness")}
+            for wb in args.workbooks if str(wb) in results
+        ]
+        (args.out / "summary.json").write_text(json.dumps(summary, indent=1, ensure_ascii=False), encoding="utf-8")
+
+    def one(base: str, wb: Path) -> None:
+        res = flow(base, wb, args.out / wb.stem, args.prep_rounds, not args.no_autofix, options, args.skip_share, args.skip_above_mb, args.one_comparison)
+        with lock:
+            results[str(wb)] = res
+            save()
+
+    if args.ports:
+        jobs: queue.Queue[Path] = queue.Queue()
+        for wb in args.workbooks:
+            jobs.put(wb)
+
+        def worker(port: int) -> None:
+            while True:
+                try:
+                    wb = jobs.get_nowait()
+                except queue.Empty:
+                    return
+                (args.out / wb.stem).mkdir(parents=True, exist_ok=True)
+                try:
+                    proc = _serve(port, args.out / wb.stem / "server.log")
+                except Exception as exc:
+                    with lock:
+                        results[str(wb)] = {"workbook": str(wb), "ok": False, "failure": str(exc)}
+                        save()
+                    continue
+                try:
+                    one(f"http://127.0.0.1:{port}", wb)
+                finally:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=30)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+
+        threads = [threading.Thread(target=worker, args=(int(p),)) for p in args.ports.split(",") if p.strip()]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    else:
+        for wb in args.workbooks:
+            one(args.base, wb)
+    summary = json.loads((args.out / "summary.json").read_text(encoding="utf-8")) if (args.out / "summary.json").exists() else []
+    print(json.dumps(summary, indent=1, ensure_ascii=False))
+    return 0 if summary and all(x.get("ok") and x.get("clean") for x in summary) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

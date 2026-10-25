@@ -1,5 +1,5 @@
 """1.6.8: a grid title must never change a computed value. Found by the
-autonomous Mind loop's numbers gate on the real Shlomo model: a title written
+autonomous Mind loop's numbers gate on a real client model (UC-6): a title written
 into column A of the policy table was counted by `=COUNTA(CoverageDetails!A:A)`
 and the model picked a different policy; the company name in Information!A1
 was "moved" into a title while five sheets read `=Information!A1`."""
@@ -128,3 +128,80 @@ def test_titles_leave_every_computed_value_unchanged_end_to_end(tmp_path):
     assert out["status"] == "APPLIED"
     gate = ml.numbers_gate(path, Path(out["output_path"]), out["applied"], analysis, tmp_path / "numbers")
     assert gate["ran"] and gate["match"], gate
+
+
+# --- 1.8.0: what Excel does not move along when a row is inserted ---------------------------
+def test_no_row_insert_on_a_sheet_inside_a_3d_reference(tmp_path):
+    """=SUM('Line 1:>>'!B2) reads B2 on every sheet from 'Line 1' to '>>', by
+    position. A row inserted on 'Line 1' alone shifts that sheet and the total
+    reads another line (UC-4: 2,462 computed values changed)."""
+    lob = {"A1": "Line", "B1": "2024", "A2": "Premium", "B2": 100, "A3": "Claims", "B3": 60}
+    path = _wb(tmp_path / "m.xlsx", {
+        "Line 1": dict(lob), "Line 2": dict(lob), ">>": {},
+        "Total": {"A2": "Premium", "B2": "=SUM('Line 1:>>'!B2)", "A3": "Claims", "B3": "=SUM('Line 1:>>'!B3)"},
+        "Other": {"A1": "Id", "B1": "Value", "A2": 1, "B2": 10},
+    })
+    analysis = build_analysis(path, tmp_path / "w", "t")
+    index = prep.reference_index(analysis)
+    assert set(index["positional"]) == {"Line 1", "Line 2", ">>"} and "Total!B2" in index["positional"]["Line 1"]
+    assert "3-D reference" in prep.insert_blocker(index, "Line 2") and prep.insert_blocker(index, "Other") is None
+    assert prep.referenced_by(index, "Line 2", 2, 2) == "Total!B2"  # the cells it reads are known on every sheet of the range
+    ops, skipped = _titles(analysis)
+    assert not any(o["op"] == "insert_row" and o["sheet"] in ("Line 1", "Line 2") for o in ops), ops
+    assert any(o["op"] == "insert_row" and o["sheet"] == "Other" for o in ops), ops  # a sheet nothing reads by position still gets its title row
+    assert any(s.startswith("Line 1!") and "3-D reference" in s and "Total!B2" in s for s in skipped), skipped
+
+
+def test_no_row_insert_on_a_sheet_an_indirect_addresses_as_text(tmp_path):
+    """=INDIRECT("'"&A1&"'!B"&A2) is text: Excel does not move it when a row is
+    inserted on the sheet it names -- named here by the cell A1, and by a text
+    piece ("'CoC "&n) for the CoC sheets."""
+    block = {"A1": "Line", "B1": "2024", "A2": "Premium", "B2": 100, "A3": "Claims", "B3": 60}
+    path = _wb(tmp_path / "m.xlsx", {
+        "Line 1": dict(block), "CoC 1": dict(block), "CoC 2": dict(block), "Free": dict(block),
+        "Report": {
+            "A1": "Line 1", "A2": 2,
+            "C1": '=INDIRECT("\'"&A1&"\'!B"&A2)',
+            "C2": '=INDIRECT("\'CoC "&A2&"\'!B3")',
+        },
+    })
+    analysis = build_analysis(path, tmp_path / "w", "t")
+    index = prep.reference_index(analysis)
+    assert set(index["text_addressed"]) == {"Line 1", "CoC 1", "CoC 2"}
+    assert "INDIRECT" in prep.insert_blocker(index, "CoC 2") and prep.insert_blocker(index, "Free") is None
+    ops, skipped = _titles(analysis)
+    inserted = {o["sheet"] for o in ops if o["op"] == "insert_row"}
+    assert "Free" in inserted and not inserted & {"Line 1", "CoC 1", "CoC 2"}, (inserted, skipped)
+    assert any(s.startswith("Line 1!") and "address built as text" in s and "Report!C1" in s for s in skipped), skipped
+
+
+def test_an_indirect_that_names_no_sheet_anyone_can_tell_blocks_every_sheet(tmp_path):
+    block = {"A1": "Line", "B1": "2024", "A2": "Premium", "B2": 100}
+    path = _wb(tmp_path / "m.xlsx", {
+        "One": dict(block), "Two": dict(block),
+        "Report": {"A1": 3, "C1": '=INDIRECT("\'"&CHAR(64+A1)&"\'!B2")', "E1": '=INDIRECT("B"&A1)'},
+    })
+    index = prep.reference_index(build_analysis(path, tmp_path / "w", "t"))
+    assert set(index["text_addressed"]) == {"One", "Two", "Report"}  # C1: any sheet; E1: its own sheet
+
+
+def test_referenced_by_finds_the_first_reader_as_the_plain_scan_does():
+    """1.11.10: referenced_by looks only at the rectangles in the cell's band of rows (tall ones
+    apart); the answer must stay the first reader in reading order."""
+    import random
+
+    from app.prep import referenced_by
+
+    rng = random.Random(7)
+    for _ in range(20):
+        rects = []
+        for i in range(rng.randint(0, 300)):
+            r1 = rng.randint(1, 5000)
+            r2 = r1 + rng.choice([0, 0, 3, 64, 200, 30000])
+            c1 = rng.randint(1, 30)
+            rects.append((r1, r2, c1, c1 + rng.randint(0, 5), f"S!X{i}"))
+        index = {"whole_cols": {}, "whole_rows": {}, "rects": {"S": rects}}
+        for _ in range(200):
+            row, col = rng.randint(1, 40000), rng.randint(1, 36)
+            plain = next((o for r1, r2, c1, c2, o in rects if r1 <= row <= r2 and c1 <= col <= c2), None)
+            assert referenced_by(index, "S", row, col) == plain

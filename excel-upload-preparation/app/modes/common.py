@@ -1,6 +1,6 @@
 """Shared ANALYZE -> VALIDATE -> ASK -> REPORT runner for all four modes.
 TRANSFORM/VERIFY are intentionally absent (no change-set application or
-recalculation adapter in this MVP -- see CHANGELOG.md 1.1.0).
+recalculation adapter here: Prep, the fixer and app/recalc.py do those).
 """
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from ..formula_utils import formula_memo
 from ..inventory import build_analysis
 from ..models import Mode, ProcessingResult, Status
 from ..report import build_validation_report
@@ -31,7 +32,13 @@ def _build_question(finding: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def run_mode(
+def run_mode(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    """_run_mode with every formula parsed once for all the rules (formula_memo)."""
+    with formula_memo():
+        return _run_mode(*args, **kwargs)
+
+
+def _run_mode(
     mode: Mode,
     source_path: Path,
     work_dir: Path,
@@ -82,8 +89,8 @@ def run_mode(
             "validation_status": validation_report["status"],
             "recalculation_performed": False,
             "reason": (
-                "PASS is unreachable in this MVP: no recalculation adapter is implemented "
-                "(READY-001 always reports NOT_SUPPORTED)."
+                "PASS needs a real recalculation in Excel: until one has run, "
+                "READY-001 reports NOT_SUPPORTED."
                 if overall_status != Status.PASS
                 else None
             ),

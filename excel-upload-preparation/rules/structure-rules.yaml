@@ -210,3 +210,66 @@ rules:
     automatic: false
   on_unevaluable: NOT_SUPPORTED
   severity_source: MEDIUM
+- id: REF-002
+  version: 1.0.0
+  status: active
+  category: structure
+  description: 'External links in formulas -- a formula that reads another workbook; Mind cannot follow an external link (every such formula is an error there), Excel shows the copy it kept.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-10-08, a client model, 20,934 formulas on a link to an unreachable file)
+    article: REF-002
+  validation:
+    deterministic: true
+    implementation: validators.structure.external_links_in_formulas
+  correction:
+    automatic: true
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - No formula reads another workbook and the package holds no external link part.
+  fail_if:
+  - A formula reads a cell of another workbook.
+  severity_source: BLOCKER
+- id: STR-008
+  version: 1.0.0
+  status: active
+  category: structure
+  description: 'Lone text cell read by formulas -- a text cell with nothing around it (no grid, no title, no label beside it) that a formula reads; Mind imports grids, not loose text cells, and the formula gets nothing.'
+  confidence: HIGH
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-10-08, a client model and a test workbook)
+    article: STR-008
+  validation:
+    deterministic: true
+    implementation: validators.structure.lone_text_cells_read
+  correction:
+    automatic: true
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - No text cell standing alone on its sheet is read by a formula.
+  fail_if:
+  - A formula reads a text cell that belongs to no grid and has no title above it or label beside it.
+  severity_source: BLOCKER
+- id: STR-009
+  version: 1.0.0
+  status: active
+  category: structure
+  description: 'Pivot table -- Mind''s converter stops on pivot tables ("The method or operation is not implemented"), plain ones too, not only one with a grouped field. Prep turns every pivot table into formulas or values, per the pivot setting in Advanced.'
+  confidence: MEDIUM
+  priority: REQUIRED
+  source:
+    document: real Mind conversion testing (2026-10-18 and 2026-10-25, a client model -- rejected with its 8 pivot tables, rejected with only the grouped one as values, accepted with all of them as values)
+    article: STR-009
+  validation:
+    deterministic: true
+    implementation: validators.structure.pivot_tables
+  correction:
+    automatic: true
+  on_unevaluable: NOT_SUPPORTED
+  pass_if:
+  - The workbook has no pivot table.
+  fail_if:
+  - A pivot table has a grouped field (blocking), or the workbook has pivot tables (a warning).
+  severity_source: BLOCKER

@@ -1,5 +1,5 @@
 """STR-*/GRID-* validators: structure/grid checks from
-01_Mind_Readiness_Standard.md section 3, backed since 1.3.0 by the KB's
+01_Mind_Readiness_Standard.md section 3, backed by the KB's
 documented grid-detection algorithm (app/grids.py, "General structure and
 guidelines"): grids are blocks of non-empty cells, an alone text cell is
 ignored, a text-only first row is the header row, '#Name' above a grid names
@@ -230,17 +230,25 @@ def str_006(rule, analysis: dict[str, Any], config: dict[str, Any]) -> dict:
 
 
 def broken_defined_name_refs(rule, analysis: dict[str, Any], config: dict[str, Any]) -> dict:
-    """REF-001: defined names that resolve to #REF! are broken. A formula that
-    references one cannot convert in Milliman Mind (the converter reports
-    'No function found ... not a function'). Flag every referencing cell (a hard
+    """REF-001: defined names that resolve to #REF! are broken, and a name no
+    definition exists for (a misspelt name, a name deleted from the workbook)
+    is broken too -- Excel shows #NAME?. A formula that references either
+    cannot convert in Milliman Mind (the converter reports 'No function found
+    ... (not a function : <name>)'). Flag every referencing cell (a hard
     conversion blocker); if broken names exist but nothing references them, warn."""
-    from ..formula_utils import mask_strings
+    import difflib
+
+    from ..formula_utils import mask_strings, undefined_names
 
     wb0 = analysis["workbooks"][0]
+    defined = [str(d["name"]) for d in wb0.get("defined_names", [])]
+    tables = [str(t) for s in wb0.get("sheets", []) for t in s.get("tables", [])]
+    known = {n.upper() for n in defined} | {t.upper() for t in tables}
     broken = sorted({d["name"] for d in wb0.get("defined_names", []) if "#REF!" in str(d.get("value") or "")})
     name_re = re.compile(r"(?<![A-Za-z0-9_.])(" + "|".join(re.escape(n) for n in broken) + r")(?![A-Za-z0-9_.])") if broken else None
     lit_re = re.compile(r"#REF!")
     sites = []
+    missing: dict[str, int] = {}
     for f in wb0.get("formulas", []):
         formula = f.get("formula") or ""
         masked = mask_strings(formula)
@@ -249,15 +257,33 @@ def broken_defined_name_refs(rule, analysis: dict[str, Any], config: dict[str, A
             kinds.append("broken-name")
         if lit_re.search(masked):
             kinds.append("literal-#REF!")
+        unknown = undefined_names(formula, known)
+        if unknown:
+            kinds.append("undefined-name")
+            for n in unknown:
+                missing[n] = missing.get(n, 0) + 1
         if kinds:
-            sites.append({"sheet": f["sheet"], "cell": f["cell"], "kinds": kinds, "formula": formula[:140]})
+            site = {"sheet": f["sheet"], "cell": f["cell"], "kinds": kinds, "formula": formula[:140]}
+            if unknown:
+                site["undefined_names"] = unknown
+            sites.append(site)
+    # the closest existing name, for a misspelt one
+    closest = {n: (difflib.get_close_matches(n, defined + tables, n=1, cutoff=0.75) or [None])[0] for n in missing}
     if sites:
+        parts = []
+        if any("undefined-name" in s["kinds"] for s in sites):
+            named = ", ".join(f"{n} ({c} cell(s)" + (f", closest existing name: {closest[n]}" if closest[n] else "") + ")" for n, c in sorted(missing.items(), key=lambda kv: -kv[1])[:8])
+            parts.append(f"name(s) that do not exist in the workbook (Excel shows #NAME?): {named}")
+        if any(k in s["kinds"] for s in sites for k in ("broken-name", "literal-#REF!")):
+            parts.append("#REF! literals or references to #REF! defined names")
         return finding(
             "ERROR",
-            f"{len(sites)} cell(s) contain broken references (#REF! literals or references to #REF! defined names) -- "
-            f"Mind's converter cannot compile them. First: {sites[0]['sheet']}!{sites[0]['cell']}. "
-            "Fix: replace the broken reference with NA() (an error stays an error) or delete the cell if it has no impact.",
-            {"broken_names": broken, "sites": sites[:80]},
+            f"{len(sites)} cell(s) contain broken references -- {'; '.join(parts)}. Mind's converter cannot compile them "
+            f"('No function found ... not a function'). First: {sites[0]['sheet']}!{sites[0]['cell']}. "
+            "Fix: a misspelt name is corrected to the existing one; a broken reference is replaced with NA() (an error stays an error) or the cell is deleted if it has no impact. "
+            "Where a function needs a cell range (SUMIF(S)/COUNTIF(S)/AVERAGEIF(S)/MAXIFS/MINIFS/OFFSET/ROW/COLUMN/SUBTOTAL), "
+            "Excel refuses NA() -- replace that whole call with NA() instead (e.g. =SUMIFS('Data'!#REF!,J:J,\"x\") -> =NA()).",
+            {"broken_names": broken, "undefined_names": {n: {"cells": c, "closest": closest[n]} for n, c in missing.items()}, "sites": sites[:80]},
             location={"sheet": sites[0]["sheet"], "cell": sites[0]["cell"]},
         )
     if broken:
@@ -353,3 +379,73 @@ def totals_reconcile(rule, analysis: dict[str, Any], config: dict[str, Any]) -> 
             {"mismatches": mismatches[:50], "checked": checked},
         )
     return finding("PASS", f"All {checked} checked SUM/addition total(s) reconcile with their addends.", {"mismatches": [], "checked": checked})
+
+
+from .references import external_links_in_formulas  # noqa: E402,F401  (REF-002)
+
+
+
+def lone_text_cells_read(rule, analysis: dict[str, Any], config: dict[str, Any], limit: int | None = 80) -> dict:
+    """STR-008: a text cell with nothing around it (no grid, no title above, no label beside it)
+    that a formula reads. Mind imports grids; a text cell standing alone is not in the model,
+    and the formula gets nothing (seen in a real Mind conversion: a lone text cell G2 that
+    Prep had separated from its label; "Name#"&$G$2 came back as "Name#" and 20,000 cells
+    followed). A number standing alone is imported; so is a text under a '#' title, next to
+    or under a label, or inside a grid (test workbook, 2026-10-08)."""
+    from ..prep import reference_index, referenced_by, standalone_labels
+
+    try:
+        index = reference_index(analysis)
+    except Exception as exc:
+        return finding("NOT_SUPPORTED", f"The references could not be indexed ({type(exc).__name__}: {str(exc)[:120]}).", {"sites": []})
+    sites = []
+    for lab in standalone_labels(analysis):
+        owner = referenced_by(index, lab["sheet"], lab["row"], lab["col"])
+        if owner:
+            sites.append({"sheet": lab["sheet"], "cell": lab["cell"], "text": str(lab["text"])[:80], "read_by": owner})
+    observed = {"sites": sites if limit is None else sites[:limit], "sites_count": len(sites)}
+    if not sites:
+        return finding("PASS", "No text cell standing alone on its sheet is read by a formula.", observed)
+    first = sites[0]
+    return finding(
+        "ERROR",
+        f"{len(sites)} text cell(s) standing alone on their sheet -- no grid, no title above, no label beside -- are read by formulas. Mind imports grids, "
+        "not loose text cells: the formula gets nothing (confirmed in a real Mind conversion: \"Name#\"&$G$2, with G2 a lone text cell, came back as \"Name#\" "
+        f"and 20,000 cells followed). First: {first['sheet']}!{first['cell']} = {first['text']!r}, read by {first['read_by']}. "
+        "The Prep action 'Give a lone text cell that formulas read a title of its own' writes a '#' title in the empty cell above it, which makes it a one-cell grid Mind imports "
+        "(a number standing alone is imported as it is; a text next to or under a label too).",
+        observed,
+        location={"sheet": first["sheet"], "cell": first["cell"]},
+    )
+
+
+def blocking_pivot(p: dict[str, Any]) -> str | None:
+    """Why Mind's converter cannot take this pivot table. A client model was rejected ("The method or
+    operation is not implemented") with its pivot tables, one of them with a grouped field, and
+    accepted with all of them as values (2026-10-18); with only the grouped one as values and the
+    plain ones kept, it was rejected again (2026-10-25). So every pivot table blocks."""
+    if p.get("grouped_fields"):
+        return f"its field {', '.join(p['grouped_fields'][:3])} is grouped"
+    return "Mind's converter stops on a pivot table"
+
+
+def pivot_tables(rule, analysis: dict[str, Any], config: dict[str, Any]) -> dict:
+    """STR-009: the workbook's pivot tables, every one blocking (blocking_pivot). The Prep action turns
+    them into formulas or values."""
+    pivots = []
+    for s in analysis["workbooks"][0].get("sheets", []):
+        for p in s.get("pivot_tables", []) or []:
+            pivots.append({"sheet": s["name"], "name": p["name"], "ref": p["ref"], "blocking": blocking_pivot(p)})
+    observed = {"pivots": pivots, "count": len(pivots), "blocking": len(pivots)}
+    if not pivots:
+        return finding("PASS", "The workbook has no pivot table.", observed)
+    first = pivots[0]
+    return finding(
+        "ERROR",
+        f"{len(pivots)} pivot table(s), first {first['sheet']}!{first['ref']} ({first['name']}): Mind's converter stops on a pivot table. "
+        "In a real Mind conversion a workbook was refused (\"The method or operation is not implemented\") with its pivot tables, again with only the one with a grouped field "
+        "turned into values (2026-10-18, 2026-10-25), and accepted once all of them were plain cells. "
+        "The Prep action 'Pivot tables' turns them into formulas over their source (values where formulas cannot give the same numbers), or into plain values.",
+        observed,
+        location={"sheet": first["sheet"], "cell": first["ref"].split(":")[0]},
+    )

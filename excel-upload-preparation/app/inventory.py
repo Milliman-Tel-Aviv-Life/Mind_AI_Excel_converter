@@ -8,11 +8,11 @@ convention: schemas/workbook-analysis.schema.json declares those fields as
 plain `type: object` / `type: array` with no nested schema, so there is
 nothing more specific to conform to.
 
-1.3.0 additions (all read-only, all from the same single cell pass):
+Also read (all read-only, all from the same single cell pass):
   * Mind-style grid detection with '#Title /Flag' parsing (app/grids.py)
   * array formulas (legacy CSE and dynamic-array) and data-table formulas,
     which openpyxl hands back as objects rather than '=...' strings and
-    were previously invisible to every formula check
+    would otherwise be invisible to every formula check
   * per-sheet style statistics (number-format categories, theme colours,
     empty-but-filled cells), outlines/hidden rows+columns, data validations,
     conditional formatting, sheet protection, tab colour
@@ -24,6 +24,8 @@ nothing more specific to conform to.
 """
 from __future__ import annotations
 
+import os
+
 import hashlib
 import re
 import shutil
@@ -34,16 +36,64 @@ from typing import Any, Callable, Iterable
 import openpyxl
 from openpyxl.reader.excel import ExcelReader
 from openpyxl.styles.numbers import is_date_format
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
 
-from .formula_utils import called_functions, find_calls, range_length, storage_prefixes
-from .grids import detect_grids, is_occupied, json_safe
+from . import fast_xlsx
+from .perf import stage as perf_stage
+from .formula_utils import STORAGE_PREFIX_RE, called_functions, find_calls, parse_ref, range_length, storage_prefixes
+from .grids import detect_grids, is_occupied, json_safe, MergedInto
+
+fast_xlsx.install()  # the C XML parser, and the cached values kept from the formula load
+fast_xlsx.patch_openpyxl()  # a grouped pivot field must not stop the load
 
 STEP_LABELS_MARKER = "steplabels"
 MAX_STYLE_SAMPLES = 25
-MAX_STYLE_CELL_REFS = 5000  # coordinates kept per sheet for app/prep.py actions
+# Coordinates kept per sheet for app/prep.py actions. A small cap (5000) would make
+# the theme-colour and empty-style actions run in 5000-cell batches, so a large
+# sheet would need several Prep rounds for one action. 250k
+# short strings cost a few MB at most; the public API still truncates lists.
+MAX_STYLE_CELL_REFS = 250_000
 
-_WORKBOOK_CACHE: dict[str, Any] = {}
+class _BoundedCache(dict):
+    """A dict that keeps only the `limit` most recently used entries.
+
+    The workbook caches below hold a whole openpyxl workbook per analysed copy. Unbounded, every
+    re-analysis of a version would add one more: a 36 MB model took the web server past 13 GB and
+    the machine out of memory. An evicted workbook is simply read again from its copy if needed."""
+
+    def __init__(self, limit: int) -> None:
+        super().__init__()
+        self.limit = limit
+
+    def get(self, key, default=None):  # type: ignore[override]
+        if key in self:
+            value = super().pop(key)
+            super().__setitem__(key, value)  # most recent last
+            return value
+        return default
+
+    def __setitem__(self, key, value) -> None:
+        if key in self:
+            super().pop(key)
+        super().__setitem__(key, value)
+        evicted = False
+        while len(self) > self.limit:
+            oldest = next(iter(self))
+            wb = super().pop(oldest)
+            try:
+                wb.close()
+            except Exception:
+                pass
+            evicted = True
+        if evicted:
+            import gc
+
+            gc.collect()
+
+
+WORKBOOK_CACHE_LIMIT = int(os.environ.get("MIND_READY_WORKBOOK_CACHE", "2"))
+_WORKBOOK_CACHE: dict[str, Any] = _BoundedCache(WORKBOOK_CACHE_LIMIT)
 
 # A progress callback: progress(stage, message, fraction_within_stage_or_None, **facts).
 # Stages, in order: copy, load, inventory, names, rules, plan (the web server
@@ -104,10 +154,13 @@ def load_workbook_selective(path: str | Path, ignore_sheets: Iterable[str] = (),
     hook it is exactly openpyxl.load_workbook."""
     ignore = {str(n) for n in ignore_sheets or ()}
     if not ignore and progress is None:
-        return openpyxl.load_workbook(str(path), data_only=data_only, keep_vba=keep_vba)
-    reader = _SelectiveReader(str(path), ignore, progress, read_only=False, keep_vba=keep_vba, data_only=data_only, keep_links=True, rich_text=False)
-    reader.read()
-    return reader.wb
+        wb = openpyxl.load_workbook(str(path), data_only=data_only, keep_vba=keep_vba)
+    else:
+        reader = _SelectiveReader(str(path), ignore, progress, read_only=False, keep_vba=keep_vba, data_only=data_only, keep_links=True, rich_text=False)
+        reader.read()
+        wb = reader.wb
+    wb.mind_ready_ignore = tuple(sorted(ignore))  # which sheets this load left empty (fast_xlsx.values_view)
+    return wb
 
 
 def ignored_sheet_names(analysis: dict[str, Any], workbook_index: int = 0) -> list[str]:
@@ -141,29 +194,34 @@ def has_vba_project(path: Path) -> bool:
 
 def make_immutable_copy(source_path: Path, work_dir: Path) -> tuple[Path, str]:
     """Hash the source, then copy it -- never open or modify the original.
-    Non-negotiable rule #1 (SKILL.md): never modify the source workbook.
+    The source workbook is never modified.
     """
     source_path = Path(source_path)
     if not source_path.is_file():
         raise FileNotFoundError(source_path)
     source_sha256 = sha256_of(source_path)
+    copy_path = next_copy_path(work_dir, source_path.name)
+    shutil.copy2(source_path, copy_path)
+    return copy_path, source_sha256
+
+
+def next_copy_path(work_dir: Path, name: str) -> Path:
+    """Where the next copy named `name` goes in `work_dir`: work_dir/name, else the first free
+    work_dir/vN/name. The source may itself be an earlier output living in `work_dir` (the UI
+    re-applies changes to the file it just produced): never copy a file onto itself, and never
+    overwrite a previous output -- use a fresh versioned sub-folder instead."""
+    work_dir = Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
-    copy_path = work_dir / source_path.name
-    # The source may itself be an earlier output living in `work_dir` (the UI
-    # re-applies changes to the file it just produced): never copy a file onto
-    # itself, and never overwrite a previous output -- use a fresh versioned
-    # sub-folder instead.
+    copy_path = work_dir / name
     if copy_path.exists():
         n = 2
         while True:
-            candidate = work_dir / f"v{n}" / source_path.name
+            candidate = work_dir / f"v{n}" / name
             if not candidate.exists():
                 candidate.parent.mkdir(parents=True, exist_ok=True)
-                copy_path = candidate
-                break
+                return candidate
             n += 1
-    shutil.copy2(source_path, copy_path)
-    return copy_path, source_sha256
+    return copy_path
 
 
 def open_cached(analysis: dict[str, Any], workbook_index: int = 0):
@@ -185,7 +243,7 @@ def cell_value(analysis: dict[str, Any], sheet: str, row: int, col: int) -> Any:
     return json_safe(wb[sheet].cell(row, col).value)
 
 
-_VALUES_CACHE: dict[str, Any] = {}
+_VALUES_CACHE: dict[str, Any] = _BoundedCache(max(1, WORKBOOK_CACHE_LIMIT - 1))
 
 
 def _values_workbook(path: str, ignore_sheets: Iterable[str] = ()):
@@ -196,7 +254,13 @@ def _values_workbook(path: str, ignore_sheets: Iterable[str] = ()):
     key = f"{path}|{'|'.join(ignore)}" if ignore else path
     wb = _VALUES_CACHE.get(key)
     if wb is None:
-        wb = load_workbook_selective(path, ignore, data_only=True)
+        # the formula load of the same file kept every cached value -- no second parse
+        formulas = _WORKBOOK_CACHE.get(str(path))
+        if formulas is not None and getattr(formulas, "mind_ready_ignore", ()) == ignore:
+            wb = fast_xlsx.values_view(formulas)
+        if wb is None:
+            with perf_stage("values_full_load", file=Path(path).name, ignored=len(ignore)):
+                wb = load_workbook_selective(path, ignore, data_only=True)
         _VALUES_CACHE[key] = wb
     return wb
 
@@ -205,8 +269,11 @@ def values_cell(analysis: dict[str, Any], sheet: str, row: int, col: int) -> Any
     """The value Excel last stored for a cell (what a formula computed), or
     None when the workbook carries no cached value for it."""
     copy_path = analysis["workbooks"][0]["copy_path"]
+    ignored = ignored_sheet_names(analysis)
     try:
-        wb = _values_workbook(str(copy_path))
+        # the sheets the scan skipped stay out of the load (it is then served from the scan's own
+        # load); a value on a skipped sheet needs the full load
+        wb = _values_workbook(str(copy_path), () if sheet in ignored else ignored)
     except Exception:
         return None
     if sheet not in wb.sheetnames:
@@ -265,10 +332,10 @@ def cell_window(analysis: dict[str, Any], sheet: str, cell: str, rows: int = 3, 
             formula = None
             array_ref = None
             if isinstance(raw, str) and raw.startswith("="):
-                formula = raw
+                formula = STORAGE_PREFIX_RE.sub("", raw)  # `_xlfn.` etc. are storage artefacts, not what Excel shows
             elif isinstance(raw, ArrayFormula):
                 text = raw.text if str(raw.text).startswith("=") else "=" + str(raw.text)
-                formula, array_ref = "{" + text + "}", str(raw.ref)
+                formula, array_ref = "{" + STORAGE_PREFIX_RE.sub("", text) + "}", str(raw.ref)
             elif isinstance(raw, DataTableFormula):
                 formula = "=TABLE()"
             if formula is None:
@@ -366,71 +433,95 @@ def _sheet_inventory(ws) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str
     format_samples: list[dict[str, Any]] = []
     array_formula_count = 0
     prefix_counts: dict[str, int] = {}
+    style_info: dict[tuple[int, int, int], tuple[bool, str, bool]] = {}
+    format_category: dict[tuple[str, bool], str] = {}
 
-    for row in ws.iter_rows():
-        for cell in row:
-            value = cell.value
-            occupied_here = is_occupied(value)
+    # the cells the sheet holds, row by row -- ws.iter_rows() also *creates* a blank cell for
+    # every empty position of the used rectangle (5.4 million on one 27 MB workbook), and a blank cell
+    # adds nothing below (no value, no style, no comment, no link)
+    for _key, cell in sorted(ws._cells.items()):
+        value = cell.value
+        occupied_here = is_occupied(value)
+        if occupied_here:
+            occupied[(cell.row, cell.column)] = value
+
+        formula_text: str | None = None
+        entry: dict[str, Any] | None = None
+        if isinstance(value, str) and value.startswith("="):
+            formula_text = value
+            entry = {"sheet": ws.title, "cell": cell.coordinate, "formula": value}
+        elif isinstance(value, ArrayFormula):
+            formula_text = value.text if value.text.startswith("=") else "=" + value.text
+            entry = {"sheet": ws.title, "cell": cell.coordinate, "formula": formula_text, "array_ref": value.ref}
+            array_formula_count += 1
+        elif isinstance(value, DataTableFormula):
+            entry = {"sheet": ws.title, "cell": cell.coordinate, "formula": "=TABLE()", "data_table": True}
+            formula_text = None
+        if entry is not None:
+            if formula_text:
+                for fn in called_functions(formula_text):
+                    function_usage[fn] = function_usage.get(fn, 0) + 1
+                prefixes = storage_prefixes(formula_text)
+                if prefixes:
+                    entry["storage_prefixes"] = sorted(prefixes)
+                    for p in prefixes:
+                        prefix_counts[p] = prefix_counts.get(p, 0) + 1
+            formulas.append(entry)
+
+        # Excel locks every cell by default (an explicit lock leaves no style
+        # trace), and locking only bites on a protected sheet (KB): count
+        # occupied cells on protected sheets that are not explicitly unlocked.
+        if occupied_here and sheet_protected and (cell.protection is None or cell.protection.locked):
+            locked_cells += 1
+        if cell.has_style:
+            # what a style says is worked out once per (font, fill, number format) -- reading
+            # cell.font / cell.fill / cell.number_format builds three style proxies a cell (13 million
+            # on a 27 MB workbook, two minutes)
+            st = cell._style
+            style_key = (st[0], st[1], st[3])  # StyleArray: fontId, fillId, borderId, numFmtId, ...
+            info = style_info.get(style_key)
+            if info is None:
+                font_color = cell.font.color if cell.font is not None else None
+                fill = cell.fill
+                fill_theme = fill is not None and fill.fill_type is not None and _color_is_theme(fill.fgColor)
+                info = style_info[style_key] = (_color_is_theme(font_color) or fill_theme, cell.number_format, fill is not None and fill.fill_type == "solid")
+            themed, number_format, solid_fill = info
             if occupied_here:
-                occupied[(cell.row, cell.column)] = value
-
-            formula_text: str | None = None
-            entry: dict[str, Any] | None = None
-            if isinstance(value, str) and value.startswith("="):
-                formula_text = value
-                entry = {"sheet": ws.title, "cell": cell.coordinate, "formula": value}
-            elif isinstance(value, ArrayFormula):
-                formula_text = value.text if value.text.startswith("=") else "=" + value.text
-                entry = {"sheet": ws.title, "cell": cell.coordinate, "formula": formula_text, "array_ref": value.ref}
-                array_formula_count += 1
-            elif isinstance(value, DataTableFormula):
-                entry = {"sheet": ws.title, "cell": cell.coordinate, "formula": "=TABLE()", "data_table": True}
-                formula_text = None
-            if entry is not None:
-                if formula_text:
-                    for fn in called_functions(formula_text):
-                        function_usage[fn] = function_usage.get(fn, 0) + 1
-                    prefixes = storage_prefixes(formula_text)
-                    if prefixes:
-                        entry["storage_prefixes"] = sorted(prefixes)
-                        for p in prefixes:
-                            prefix_counts[p] = prefix_counts.get(p, 0) + 1
-                formulas.append(entry)
-
-            # Excel locks every cell by default (an explicit lock leaves no style
-            # trace), and locking only bites on a protected sheet (KB): count
-            # occupied cells on protected sheets that are not explicitly unlocked.
-            if occupied_here and sheet_protected and (cell.protection is None or cell.protection.locked):
-                locked_cells += 1
-            if cell.has_style:
-                if occupied_here:
-                    font_color = cell.font.color if cell.font is not None else None
-                    fill = cell.fill
-                    fill_theme = fill is not None and fill.fill_type is not None and _color_is_theme(fill.fgColor)
-                    if _color_is_theme(font_color) or fill_theme:
-                        theme_color_cells += 1
-                        if len(theme_color_cell_refs) < MAX_STYLE_CELL_REFS:
-                            theme_color_cell_refs.append(cell.coordinate)
-                    category = classify_number_format(cell.number_format, cell)
-                    format_categories[category] = format_categories.get(category, 0) + 1
-                    if category not in PRESERVED_FORMAT_CATEGORIES and len(format_samples) < MAX_STYLE_SAMPLES:
-                        format_samples.append({"cell": cell.coordinate, "number_format": cell.number_format, "category": category})
-                else:
-                    fill = cell.fill
-                    if fill is not None and fill.fill_type == "solid":
-                        empty_styled_cells += 1
-                        if len(empty_styled_cell_refs) < MAX_STYLE_CELL_REFS:
-                            empty_styled_cell_refs.append(cell.coordinate)
-            elif occupied_here:
-                category = "boolean" if cell.data_type == "b" else "standard"
+                if themed:
+                    theme_color_cells += 1
+                    if len(theme_color_cell_refs) < MAX_STYLE_CELL_REFS:
+                        theme_color_cell_refs.append(cell.coordinate)
+                category_key = (number_format, cell.data_type == "b")
+                category = format_category.get(category_key)
+                if category is None:
+                    category = format_category[category_key] = classify_number_format(number_format, cell)
                 format_categories[category] = format_categories.get(category, 0) + 1
+                if category not in PRESERVED_FORMAT_CATEGORIES and len(format_samples) < MAX_STYLE_SAMPLES:
+                    format_samples.append({"cell": cell.coordinate, "number_format": number_format, "category": category})
+            else:
+                if solid_fill:
+                    empty_styled_cells += 1
+                    if len(empty_styled_cell_refs) < MAX_STYLE_CELL_REFS:
+                        empty_styled_cell_refs.append(cell.coordinate)
+        elif occupied_here:
+            category = "boolean" if cell.data_type == "b" else "standard"
+            format_categories[category] = format_categories.get(category, 0) + 1
 
-            if cell.comment is not None:
-                comments.append({"cell": cell.coordinate, "author": cell.comment.author, "text": cell.comment.text})
-            if cell.hyperlink is not None:
-                hyperlinks.append({"cell": cell.coordinate, "target": cell.hyperlink.target})
+        if cell.comment is not None:
+            comments.append({"cell": cell.coordinate, "author": cell.comment.author, "text": cell.comment.text})
+        if cell.hyperlink is not None:
+            hyperlinks.append({"cell": cell.coordinate, "target": cell.hyperlink.target})
 
+    # a merged range whose first cell is occupied occupies every cell it covers (see grids.MergedInto)
+    for rng in ws.merged_cells.ranges:
+        anchor = (rng.min_row, rng.min_col)
+        if anchor in occupied:
+            for r in range(rng.min_row, rng.max_row + 1):
+                for c in range(rng.min_col, rng.max_col + 1):
+                    if (r, c) != anchor and (r, c) not in occupied:
+                        occupied[(r, c)] = MergedInto(anchor, occupied[anchor])
     grids, standalone = detect_grids(ws.title, occupied)
+    tables = sorted(str(t) for t in getattr(ws, "tables", {}).keys()) if hasattr(getattr(ws, "tables", None), "keys") else []
 
     row_groups = hidden_rows = max_row_level = 0
     for dim in ws.row_dimensions.values():
@@ -462,6 +553,35 @@ def _sheet_inventory(ws) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str
     except Exception:
         pass
 
+    # where the pivot tables sit -- Excel refuses to write into one or to insert a row or a
+    # column through it. The report filters sit above the body (rowPageCount rows and a blank row).
+    pivot_tables = []
+    for pv in getattr(ws, "_pivots", None) or []:
+        try:
+            loc = pv.location
+            ref = parse_ref(str(loc.ref))
+            if not ref:
+                continue
+            top = ref["r1"] - (int(loc.rowPageCount or 0) + 1 if loc.rowPageCount else 0)
+            # what the pivot is built from -- Mind's converter cannot read a grouped field
+            grouped, calculated, source = [], [], None
+            try:
+                cache = pv.cache
+                source = getattr(cache.cacheSource, "type", None)
+                for cf in cache.cacheFields or []:
+                    if getattr(cf, "fieldGroup", None) is not None:
+                        grouped.append(str(cf.name))
+                    if getattr(cf, "formula", None):
+                        calculated.append(str(cf.name))
+            except Exception:
+                pass
+            pivot_tables.append({
+                "name": str(pv.name), "ref": f"{get_column_letter(ref['c1'])}{max(1, top)}:{get_column_letter(ref['c2'])}{ref['r2']}",
+                "cells": (ref["r2"] - max(1, top) + 1) * (ref["c2"] - ref["c1"] + 1), "grouped_fields": grouped, "calculated_fields": calculated, "source": source,
+            })
+        except Exception:
+            continue
+
     state = ws.sheet_state  # 'visible' | 'hidden' | 'veryHidden'
     tab_color = None
     try:
@@ -474,10 +594,13 @@ def _sheet_inventory(ws) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str
     sheet_entry = {
         "name": ws.title,
         "state": state,
-        "dimensions": ws.dimensions,
+        # as when every position from A1 was visited (ws.iter_rows() created them): A1 to the last used cell
+        "dimensions": f"A1:{get_column_letter(ws.max_column)}{ws.max_row}",
         "tab_color": tab_color,
         "protected": sheet_protected,
         "merged_cells": merged,
+        "tables": tables,
+        "pivot_tables": pivot_tables,
         "locked_cell_count": locked_cells,
         "comments": comments,
         "hyperlinks": hyperlinks,
@@ -582,6 +705,8 @@ def build_analysis(
 
     features = {
         "sheet_count": len(sheets),
+        # Excel's "enable iterative calculation" -- the setting that lets circular references compute (FRM-005)
+        "iterative_calculation": bool(getattr(getattr(wb, "calculation", None), "iterate", False)),
         "ignored_sheet_count": len(ignored_sheets),
         "total_sheet_count": len(all_sheets),
         "hidden_sheet_count": hidden_sheet_count,
@@ -654,11 +779,30 @@ def build_analysis(
 
 
 # --- MM-call iterators shared by the validators -----------------------------
+_MM_FORMULAS: dict[str, Any] = {}  # the last workbook's formulas that can call an MM_ function
+
+
+def _mm_formulas(formulas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The rules ask for one MM_ function after another (38 times per scan), each a pass
+    over every formula (245,847 on a big workbook): the formulas that mention "mm_" at all are found once.
+    A formula with non-ASCII text is always kept (find_calls' own shortcut is ASCII only)."""
+    hit = _MM_FORMULAS
+    if hit.get("src") is formulas and hit.get("n") == len(formulas):
+        return hit["mm"]
+    mm = [f for f in formulas if isinstance(f.get("formula"), str) and (not f["formula"].isascii() or "mm_" in f["formula"].lower())]
+    _MM_FORMULAS.clear()
+    _MM_FORMULAS.update(src=formulas, n=len(formulas), mm=mm)
+    return mm
+
+
 def mm_calls(analysis: dict[str, Any], function_name: str) -> list[dict[str, Any]]:
     """Every call site of one MM_ function: {sheet, cell, formula, args, array_ref}."""
     out = []
     for wb_entry in analysis["workbooks"]:
-        for f in wb_entry["formulas"]:
+        formulas = wb_entry["formulas"]
+        if function_name.isascii() and function_name.lower().startswith("mm_"):
+            formulas = _mm_formulas(formulas)
+        for f in formulas:
             for args in find_calls(f["formula"], function_name):
                 out.append(
                     {
@@ -688,6 +832,8 @@ def loop_definitions(analysis: dict[str, Any]) -> dict[str, list[dict[str, Any]]
                 "formula": call["formula"],
                 "range_arg": range_arg,
                 "range_length": range_length(range_arg) if range_arg else None,
+                # MM_COLUMN(cell) / MM_ROW(cell) / MM_TABLE(cell): the range follows the table's grid in Mind
+                "dynamic": bool(range_arg and re.search(r"\bMM_(COLUMN|ROW|TABLE|LASTROW|LASTROWCELL|LASTCOLUMN|LASTCOLUMNCELL)\s*\(", range_arg, re.I)),
                 "literal_name": args[0].strip().startswith('"'),
             }
         )
